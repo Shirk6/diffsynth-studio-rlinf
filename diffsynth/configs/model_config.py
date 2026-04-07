@@ -5,7 +5,6 @@ from ..models.wan_video_image_encoder import WanImageEncoder
 from ..models.wan_video_vae import WanVideoVAE, WanVideoVAE38
 from ..models.wan_video_motion_controller import WanMotionControllerModel
 from ..models.wan_video_vace import VaceWanModel
-from ..models.wav2vec import WanS2VAudioEncoder
 from ..models.wan_video_animate_adapter import WanAnimateAdapter
 from ..models.wan_video_mot import MotWanModel
 
@@ -61,6 +60,5 @@ model_loader_configs = [
     # (None, "ed4ea5824d55ec3107b09815e318123a", ["qwen_image_vae"], [QwenImageVAE], "diffusers"),
     # (None, "073bce9cf969e317e5662cd570c3e79c", ["qwen_image_blockwise_controlnet"], [QwenImageBlockWiseControlNet], "civitai"),
     # (None, "a9e54e480a628f0b956a688a81c33bab", ["qwen_image_blockwise_controlnet"], [QwenImageBlockWiseControlNet], "civitai"),
-    (None, "06be60f3a4526586d8431cd038a71486", ["wans2v_audio_encoder"], [WanS2VAudioEncoder], "civitai"),
     (None, "31fa352acb8a1b1d33cd8764273d80a2", ["wan_video_dit", "wan_video_animate_adapter"], [WanModel, WanAnimateAdapter], "civitai"),
 ]
