@@ -5,8 +5,7 @@ import math
 from typing import Tuple, Optional
 from einops import rearrange
 from .utils import hash_state_dict_keys
-from .wan_video_camera_controller import SimpleAdapter
-from timm.models.vision_transformer import Mlp, PatchEmbed
+from timm.models.vision_transformer import Mlp
 try:
     import flash_attn_interface
     FLASH_ATTN_3_AVAILABLE = True
@@ -33,12 +32,7 @@ try:
 except:
     pass
 
-import matplotlib
-matplotlib.use('Agg') # 必须在导入 pyplot 之前设置
-import matplotlib.pyplot as plt
-import seaborn as sns
 import os
-
 
 def flash_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, num_heads: int, compatibility_mode=False):
     if compatibility_mode:
@@ -372,7 +366,6 @@ class WanModel(torch.nn.Module):
         has_image_input: bool,
         has_image_pos_emb: bool = False,
         has_ref_conv: bool = False,
-        add_control_adapter: bool = False,
         in_dim_control_adapter: int = 24,
         seperated_timestep: bool = False,
         require_vae_embedding: bool = True,
@@ -473,19 +466,9 @@ class WanModel(torch.nn.Module):
             self.ref_conv = nn.Conv2d(16, dim, kernel_size=(2, 2), stride=(2, 2))
         self.has_image_pos_emb = has_image_pos_emb
         self.has_ref_conv = has_ref_conv
-        if add_control_adapter:
-            self.control_adapter = SimpleAdapter(in_dim_control_adapter, dim, kernel_size=patch_size[1:], stride=patch_size[1:])
-        else:
-            self.control_adapter = None
 
-    def patchify(self, x: torch.Tensor, control_camera_latents_input: Optional[torch.Tensor] = None):
+    def patchify(self, x: torch.Tensor):
         x = self.patch_embedding(x)
-
-        if self.control_adapter is not None and control_camera_latents_input is not None:
-            print(f'control_camera_latents_input shape: {control_camera_latents_input.shape}')
-            y_camera = self.control_adapter(control_camera_latents_input)
-            x = [u + v for u, v in zip(x, y_camera)]
-            x = x[0].unsqueeze(0)
         return x
 
     def unpatchify(self, x: torch.Tensor, grid_size: torch.Tensor):
@@ -889,25 +872,6 @@ class WanModelStateDictConverter:
                 "num_layers": 40,
                 "eps": 1e-6,
                 "has_ref_conv": True,
-                "require_clip_embedding": False,
-            }
-        elif hash_state_dict_keys(state_dict) == "47dbeab5e560db3180adf51dc0232fb1":
-            # Wan2.2-Fun-A14B-Control-Camera
-            config = {
-                "has_image_input": False,
-                "patch_size": [1, 2, 2],
-                "in_dim": 36,
-                "dim": 5120,
-                "ffn_dim": 13824,
-                "freq_dim": 256,
-                "text_dim": 4096,
-                "out_dim": 16,
-                "num_heads": 40,
-                "num_layers": 40,
-                "eps": 1e-6,
-                "has_ref_conv": False,
-                "add_control_adapter": True,
-                "in_dim_control_adapter": 24,
                 "require_clip_embedding": False,
             }
         else:

@@ -4,8 +4,7 @@ from PIL import Image
 from diffsynth import load_state_dict
 from diffsynth.pipelines.wan_video_new import WanVideoPipeline, ModelConfig
 from diffsynth.trainers.utils import DiffusionTrainingModule, ModelLogger, launch_training_task, wan_parser
-from diffsynth.trainers.utils import RLinfDataset
-from diffsynth.trainers.utils import SimpleVLARealWorldRLinfDataset
+from diffsynth.trainers.dataset import RLinfDataset, SimpleVLARealWorldRLinfDataset
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # --- Patch Start: 允许加载包含 set 的权重文件 ---

@@ -16,15 +16,9 @@ from functools import partial
 from ..utils import BasePipeline, ModelConfig, PipelineUnit, PipelineUnitRunner
 from ..models import ModelManager, load_state_dict
 from ..models.wan_video_dit import WanModel, RMSNorm, sinusoidal_embedding_1d
-from ..models.wan_video_dit_s2v import rope_precompute
 from ..models.wan_video_text_encoder import WanTextEncoder, T5RelativeEmbedding, T5LayerNorm
 from ..models.wan_video_vae import WanVideoVAE, RMS_norm, CausalConv3d, Upsample
 from ..models.wan_video_image_encoder import WanImageEncoder
-from ..models.wan_video_vace import VaceWanModel
-from ..models.wan_video_motion_controller import WanMotionControllerModel
-from ..models.wan_video_animate_adapter import WanAnimateAdapter
-from ..models.wan_video_mot import MotWanModel
-from ..models.longcat_video_dit import LongCatVideoTransformer3DModel
 
 from ..schedulers.flow_match import FlowMatchScheduler
 from ..prompters import WanPrompter
@@ -48,11 +42,13 @@ class WanVideoPipeline(BasePipeline):
         self.dit: WanModel = None
         self.dit2: WanModel = None
         self.vae: WanVideoVAE = None
-        self.motion_controller: WanMotionControllerModel = None
-        self.vace: VaceWanModel = None
-        self.vace2: VaceWanModel = None
-        self.vap: MotWanModel = None
-        self.animate_adapter: WanAnimateAdapter = None
+
+        # following is not used in Our action-conditioned world model
+        self.motion_controller = None
+        self.vace = None
+        self.vace2 = None
+        self.vap = None
+        self.animate_adapter = None
         self.in_iteration_models = ("dit", "motion_controller", "vace", "animate_adapter", "vap")
         self.in_iteration_models_2 = ("dit2", "motion_controller", "vace2", "animate_adapter", "vap")
         self.unit_runner = PipelineUnitRunner()
@@ -1463,10 +1459,10 @@ class TemporalTiler_BCTHW:
 
 def model_fn_wan_video(
     dit: WanModel,
-    motion_controller: WanMotionControllerModel = None,
-    vace: VaceWanModel = None,
-    vap: MotWanModel = None,
-    animate_adapter: WanAnimateAdapter = None,
+    motion_controller = None,
+    vace=None,
+    vap=None,
+    animate_adapter = None,
     latents: torch.Tensor = None,
     timestep: torch.Tensor = None,
     context: torch.Tensor = None,
@@ -1527,61 +1523,7 @@ def model_fn_wan_video(
     # action shape is [B, T, action_dim] or [T, action_dim]
     # For action_mlp2 we group every 4 frames, so pad T to
     # the nearest multiple of 4 when needed.
-
-    
-
-    if sliding_window_size is not None and sliding_window_stride is not None:
-        model_kwargs = dict(
-            dit=dit,
-            motion_controller=motion_controller,
-            vace=vace,
-            latents=latents,
-            timestep=timestep,
-            context=context,
-            clip_feature=clip_feature,
-            y=y,
-            reference_latents=reference_latents,
-            vace_context=vace_context,
-            vace_scale=vace_scale,
-            tea_cache=tea_cache,
-            use_unified_sequence_parallel=use_unified_sequence_parallel,
-            motion_bucket_id=motion_bucket_id,
-        )
-        return TemporalTiler_BCTHW().run(
-            model_fn_wan_video,
-            sliding_window_size, sliding_window_stride,
-            latents.device, latents.dtype,
-            model_kwargs=model_kwargs,
-            tensor_names=["latents", "y"],
-            batch_size=2 if cfg_merge else 1
-        )
-    # LongCat-Video
-    if isinstance(dit, LongCatVideoTransformer3DModel):
-        return model_fn_longcat_video(
-            dit=dit,
-            latents=latents,
-            timestep=timestep,
-            context=context,
-            longcat_latents=longcat_latents,
-            use_gradient_checkpointing=use_gradient_checkpointing,
-            use_gradient_checkpointing_offload=use_gradient_checkpointing_offload,
-        )
         
-    # wan2.2 s2v
-    if audio_embeds is not None:
-        return model_fn_wans2v(
-            dit=dit,
-            latents=latents,
-            timestep=timestep,
-            context=context,
-            audio_embeds=audio_embeds,
-            motion_latents=motion_latents,
-            s2v_pose_latents=s2v_pose_latents,
-            drop_motion_frames=drop_motion_frames,
-            use_gradient_checkpointing_offload=use_gradient_checkpointing_offload,
-            use_gradient_checkpointing=use_gradient_checkpointing,
-            use_unified_sequence_parallel=use_unified_sequence_parallel,
-        )
 
     if use_unified_sequence_parallel:
         import torch.distributed as dist
@@ -1630,7 +1572,7 @@ def model_fn_wan_video(
     if clip_feature is not None:
         assert torch.isfinite(clip_feature).all(), "clip_feature has NaN/Inf"
     # Camera control
-    x = dit.patchify(x, control_camera_latents_input)
+    x = dit.patchify(x)
 
     action_emb = None
     if dit.enable_action_modulation:
@@ -1894,136 +1836,4 @@ def model_fn_wan_video(
     
     
     x = dit.unpatchify(x, (f, h, w))
-    return x
-
-
-def model_fn_longcat_video(
-    dit: LongCatVideoTransformer3DModel,
-    latents: torch.Tensor = None,
-    timestep: torch.Tensor = None,
-    context: torch.Tensor = None,
-    longcat_latents: torch.Tensor = None,
-    use_gradient_checkpointing=False,
-    use_gradient_checkpointing_offload=False,
-):
-    if longcat_latents is not None:
-        latents[:, :, :longcat_latents.shape[2]] = longcat_latents
-        num_cond_latents = longcat_latents.shape[2]
-    else:
-        num_cond_latents = 0
-    context = context.unsqueeze(0)
-    encoder_attention_mask = torch.any(context != 0, dim=-1)[:, 0].to(torch.int64)
-    output = dit(
-        latents,
-        timestep,
-        context,
-        encoder_attention_mask,
-        num_cond_latents=num_cond_latents,
-        use_gradient_checkpointing=use_gradient_checkpointing,
-        use_gradient_checkpointing_offload=use_gradient_checkpointing_offload,
-    )
-    output = -output
-    output = output.to(latents.dtype)
-    return output
-
-
-def model_fn_wans2v(
-    dit,
-    latents,
-    timestep,
-    context,
-    audio_embeds,
-    motion_latents,
-    s2v_pose_latents,
-    drop_motion_frames=True,
-    use_gradient_checkpointing_offload=False,
-    use_gradient_checkpointing=False,
-    use_unified_sequence_parallel=False,
-):
-    if use_unified_sequence_parallel:
-        import torch.distributed as dist
-        from xfuser.core.distributed import (get_sequence_parallel_rank,
-                                            get_sequence_parallel_world_size,
-                                            get_sp_group)
-    origin_ref_latents = latents[:, :, 0:1]
-    x = latents[:, :, 1:]
-
-    # context embedding
-    context = dit.text_embedding(context)
-
-    # audio encode
-    audio_emb_global, merged_audio_emb = dit.cal_audio_emb(audio_embeds)
-
-    # x and s2v_pose_latents
-    s2v_pose_latents = torch.zeros_like(x) if s2v_pose_latents is None else s2v_pose_latents
-    x, (f, h, w) = dit.patchify(dit.patch_embedding(x) + dit.cond_encoder(s2v_pose_latents))
-    seq_len_x = seq_len_x_global = x.shape[1] # global used for unified sequence parallel
-
-    # reference image
-    ref_latents, (rf, rh, rw) = dit.patchify(dit.patch_embedding(origin_ref_latents))
-    grid_sizes = dit.get_grid_sizes((f, h, w), (rf, rh, rw))
-    x = torch.cat([x, ref_latents], dim=1)
-    # mask
-    mask = torch.cat([torch.zeros([1, seq_len_x]), torch.ones([1, ref_latents.shape[1]])], dim=1).to(torch.long).to(x.device)
-    # freqs
-    pre_compute_freqs = rope_precompute(x.detach().view(1, x.size(1), dit.num_heads, dit.dim // dit.num_heads), grid_sizes, dit.freqs, start=None)
-    # motion
-    x, pre_compute_freqs, mask = dit.inject_motion(x, pre_compute_freqs, mask, motion_latents, drop_motion_frames=drop_motion_frames, add_last_motion=2)
-
-    x = x + dit.trainable_cond_mask(mask).to(x.dtype)
-
-    # tmod
-    timestep = torch.cat([timestep, torch.zeros([1], dtype=timestep.dtype, device=timestep.device)])
-    t = dit.time_embedding(sinusoidal_embedding_1d(dit.freq_dim, timestep))
-    t_mod = dit.time_projection(t).unflatten(1, (6, dit.dim)).unsqueeze(2).transpose(0, 2)
-
-    if use_unified_sequence_parallel and dist.is_initialized() and dist.get_world_size() > 1:
-        world_size, sp_rank = get_sequence_parallel_world_size(), get_sequence_parallel_rank()
-        assert x.shape[1] % world_size == 0, f"the dimension after chunk must be divisible by world size, but got {x.shape[1]} and {get_sequence_parallel_world_size()}"
-        x = torch.chunk(x, world_size, dim=1)[sp_rank]
-        seg_idxs = [0] + list(torch.cumsum(torch.tensor([x.shape[1]] * world_size), dim=0).cpu().numpy())
-        seq_len_x_list = [min(max(0, seq_len_x - seg_idxs[i]), x.shape[1]) for i in range(len(seg_idxs)-1)]
-        seq_len_x = seq_len_x_list[sp_rank]
-
-    def create_custom_forward(module):
-        def custom_forward(*inputs):
-            return module(*inputs)
-        return custom_forward
-
-    for block_id, block in enumerate(dit.blocks):
-        if use_gradient_checkpointing_offload:
-            with torch.autograd.graph.save_on_cpu():
-                x = torch.utils.checkpoint.checkpoint(
-                    create_custom_forward(block),
-                    x, context, t_mod, seq_len_x, pre_compute_freqs[0],
-                    use_reentrant=False,
-                )
-                x = torch.utils.checkpoint.checkpoint(
-                    create_custom_forward(lambda x: dit.after_transformer_block(block_id, x, audio_emb_global, merged_audio_emb, seq_len_x)),
-                    x,
-                    use_reentrant=False,
-                )
-        elif use_gradient_checkpointing:
-            x = torch.utils.checkpoint.checkpoint(
-                create_custom_forward(block),
-                x, context, t_mod, seq_len_x, pre_compute_freqs[0],
-                use_reentrant=False,
-            )
-            x = torch.utils.checkpoint.checkpoint(
-                create_custom_forward(lambda x: dit.after_transformer_block(block_id, x, audio_emb_global, merged_audio_emb, seq_len_x)),
-                x,
-                use_reentrant=False,
-            )
-        else:
-            x = block(x, context, t_mod, seq_len_x, pre_compute_freqs[0])
-            x = dit.after_transformer_block(block_id, x, audio_emb_global, merged_audio_emb, seq_len_x_global, use_unified_sequence_parallel)
-
-    if use_unified_sequence_parallel and dist.is_initialized() and dist.get_world_size() > 1:
-        x = get_sp_group().all_gather(x, dim=1)
-
-    x = x[:, :seq_len_x_global]
-    x = dit.head(x, t[:-1])
-    x = dit.unpatchify(x, (f, h, w))
-    # make compatible with wan video
-    x = torch.cat([origin_ref_latents, x], dim=2)
     return x
