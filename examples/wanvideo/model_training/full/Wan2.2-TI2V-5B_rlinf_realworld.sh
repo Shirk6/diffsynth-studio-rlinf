@@ -1,8 +1,6 @@
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch \
   --config_file examples/wanvideo/model_training/full/accelerate_config.yaml \
   examples/wanvideo/model_training/train_rlinf.py \
-  --height 256 \
-  --width 256 \
   --num_frames 13 \
   --dataset_repeat 1 \
   --model_paths '[

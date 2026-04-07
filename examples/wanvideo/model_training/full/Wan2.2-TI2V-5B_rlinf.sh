@@ -16,7 +16,6 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch \
   --remove_prefix_in_ckpt "pipe.dit." \
   --output_path "outputs/only4test" \
   --trainable_models "dit" \
-  --context_noise_sigma 0.0 \
   --static_video_prob 0.05 \
   --extra_inputs "input_image,action" \
   --val_interval 50 \

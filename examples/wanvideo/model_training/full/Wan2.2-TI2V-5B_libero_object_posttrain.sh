@@ -3,8 +3,6 @@ PYTHONPATH=/mnt/project_rlinf/jzn/workspace/release/DiffSynth-Studio/:$PYTHONPAT
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch \
   --config_file /mnt/project_rlinf/jzn/workspace/release/DiffSynth-Studio/examples/wanvideo/model_training/full/accelerate_config_14B.yaml \
   /mnt/project_rlinf/jzn/workspace/release/DiffSynth-Studio/examples/wanvideo/model_training/train_rlinf.py \
-  --height 256 \
-  --width 256 \
   --dataset_repeat 1 \
   --model_paths '[
     "/mnt/project_rlinf/jzn/workspace/release/DiffSynth-Studio/examples/wanvideo/model_training/full/runs/full_libero_object/epoch-599.safetensors",

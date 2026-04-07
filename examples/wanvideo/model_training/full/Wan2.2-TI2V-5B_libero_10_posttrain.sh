@@ -1,3 +1,6 @@
+export WAN_ACTION_DIM=7
+export WAN_DEBUG=False
+
 PYTHONPATH=/mnt/project_rlinf/jzn/workspace/release/DiffSynth-Studio/:$PYTHONPATH
 
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch \
