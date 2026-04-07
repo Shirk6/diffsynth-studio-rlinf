@@ -6,7 +6,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch \
   --dataset_repeat 1 \
   --model_paths '[
     "/mnt/project_rlinf/jzn/workspace/release/DiffSynth-Studio/examples/wanvideo/model_training/full/runs/full_libero_object/epoch-599.safetensors",
-    "/mnt/project_rlinf/jzn/workspace/DiffSynth-Studio/ckpt/Wan2.2_VAE.pth"
+    "/mnt/project_rlinf/jzn/workspace/release/DiffSynth-Studio/runs/Wan2.2_VAE.pth"
   ]' \
   --learning_rate 1e-5 \
   --num_epochs 100000 \
