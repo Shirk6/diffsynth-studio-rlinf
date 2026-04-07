@@ -4,7 +4,7 @@ from PIL import Image
 from diffsynth import load_state_dict
 from diffsynth.pipelines.wan_video_new import WanVideoPipeline, ModelConfig
 from diffsynth.trainers.utils import DiffusionTrainingModule, ModelLogger, launch_training_task, wan_parser
-from diffsynth.trainers.utils import RLinfNpyDataset, RLinfDataset, RLinfLeRobotObsDataset
+from diffsynth.trainers.utils import RLinfDataset
 from diffsynth.trainers.utils import SimpleVLARealWorldRLinfDataset
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -28,9 +28,7 @@ class WanTrainingModule(DiffusionTrainingModule):
         extra_inputs=None,
         max_timestep_boundary=1.0,
         min_timestep_boundary=0.0,
-        context_noise_sigma=0.0, # 新增参数
         static_video_prob=0.0, # 新增参数
-        use_wow_checkpoint=False, # 新增参数
         action_dim=7,
     ):
         super().__init__()
@@ -40,21 +38,6 @@ class WanTrainingModule(DiffusionTrainingModule):
             audio_processor_config = ModelConfig(model_id=audio_processor_config.split(":")[0], origin_file_pattern=audio_processor_config.split(":")[1])
         self.pipe = WanVideoPipeline.from_pretrained(torch_dtype=torch.bfloat16, device="cpu", model_configs=model_configs, audio_processor_config=audio_processor_config)
         
-        # --- Patch Start: 加载 WoW 权重 ---
-        if use_wow_checkpoint:
-            wow_ckpt_path = "/opt/zsq/wow-world-model/dit_models/checkpoints/WoW-1-Wan-14B-600k/WoW_video_dit.pt"
-            if os.path.exists(wow_ckpt_path):
-                print(f"🎯 Overwriting with WoW checkpoint: {wow_ckpt_path}")
-                # 使用 weights_only=False 避开报错
-                state_dict = torch.load(wow_ckpt_path, map_location="cpu", weights_only=False)
-                # 覆盖 pipe.dit 的权重
-                msg = self.pipe.dit.load_state_dict(state_dict, strict=False)
-                print(f"✅ WoW checkpoint loaded. Missing: {len(msg.missing_keys)}, Unexpected: {len(msg.unexpected_keys)}")
-            else:
-                print(f"⚠️ WoW checkpoint not found at {wow_ckpt_path}, skipping.")
-        else:
-            print("🎯 Not using WoW checkpoint.")
-        # --- Patch End ---
         # Training mode
         self.switch_pipe_to_training_mode(
             self.pipe, trainable_models,
@@ -68,7 +51,6 @@ class WanTrainingModule(DiffusionTrainingModule):
         self.extra_inputs = extra_inputs.split(",") if extra_inputs is not None else []
         self.max_timestep_boundary = max_timestep_boundary
         self.min_timestep_boundary = min_timestep_boundary
-        self.context_noise_sigma = context_noise_sigma # 保存参数
         self.static_video_prob = static_video_prob # 保存参数
         
         
@@ -80,7 +62,6 @@ class WanTrainingModule(DiffusionTrainingModule):
             data["video"] = [first_frame] * len(data["video"])
             if "action" in data:
                 data["action"] = torch.zeros_like(data["action"])
-                # data["action"][:,-1] = -1  # 最后一维设为 -1
         # ============================
         # CFG-sensitive parameters
         # inputs_posi = {"prompt": data["prompt"]}
@@ -114,14 +95,7 @@ class WanTrainingModule(DiffusionTrainingModule):
         # control_video, reference_image, etc.
         for extra_input in self.extra_inputs:
             if extra_input == "input_image":
-                # 在这里给 context frame 加噪
-                if self.context_noise_sigma > 0:
-                    img_arr = np.array(data["video"][0]).astype(np.float32)
-                    noise = np.random.normal(0, self.context_noise_sigma, img_arr.shape)
-                    img_noisy = np.clip(img_arr + noise, 0, 255).astype(np.uint8)
-                    inputs_shared["input_image"] = Image.fromarray(img_noisy)
-                else:
-                    inputs_shared["input_image"] = data["video"][0]
+                inputs_shared["input_image"] = data["video"][0]
             elif extra_input == "end_image":
                 inputs_shared["end_image"] = data["video"][-1]
             elif extra_input == "reference_image" or extra_input == "vace_reference_image":
@@ -144,14 +118,16 @@ class WanTrainingModule(DiffusionTrainingModule):
 
 if __name__ == "__main__":
     parser = wan_parser()
-    parser.add_argument("--context_noise_sigma", type=float, default=10, help="Sigma of Gaussian noise added to the context frame")
     parser.add_argument("--static_video_prob", type=float, default=0.15, help="Probability of replacing the sample with a static video (action=0)")
-    parser.add_argument("--use_wow_checkpoint", action="store_true",help="Whether to load the WoW checkpoint to overwrite the base model weights.")
     parser.add_argument("--val_interval", type=int, default=5, help="Validation interval in epochs")
     parser.add_argument("--dataset",type=str,default="RLinfNpyDataset",help="Dataset type for training")
     parser.add_argument("--action_dim", type=int, default=7, help="Action dimension for dataset and hash-based WanModel config override.")
     parser.add_argument("--val_dataset_base_path", type=str, default="[]", help="Validation dataset base paths in JSON list format.")
     parser.add_argument("--train_dataset_base_path", type=str, default="[]", help="Training dataset base paths in JSON list format.")
+    parser.add_argument("--Ta", type=int, default=8, help="Action prediction window length")
+    parser.add_argument("--To", type=int, default=4, help="Observation context window length")
+    parser.add_argument("--action2obs_bias", type=bool, default=False, help="Whether to use action2obs bias")
+    parser.add_argument("--retain_actions", type=bool, default=False, help="Whether to retain actions")
     args = parser.parse_args()
 
     def _parse_path_list(arg_value, arg_name):
@@ -177,35 +153,13 @@ if __name__ == "__main__":
     args.val_dataset_base_path = _parse_path_list(args.val_dataset_base_path, "--val_dataset_base_path")
     os.environ["WAN_ACTION_DIM"] = str(args.action_dim)
 
-    if args.dataset == "RLinfNpyDataset":
-        dataset = RLinfNpyDataset(
-            base_path=args.dataset_base_path,
-            repeat=args.dataset_repeat,
-            num_frames=args.num_frames,
-        )
-        val_dataset = RLinfNpyDataset(
-            base_path=args.val_dataset_base_path,
-            repeat=1, 
-            num_frames=args.num_frames 
-        )
-    elif args.dataset == "RLinfDataset":
+    if args.dataset == "RLinfDataset":
         dataset = RLinfDataset(
             base_path=args.train_dataset_base_path,
             repeat=args.dataset_repeat,
             action_dim=args.action_dim,
         )
         val_dataset = RLinfDataset(
-            base_path=args.val_dataset_base_path,
-            repeat=1,
-            action_dim=args.action_dim,
-        )
-    elif args.dataset == "RLinfLeRobotObsDataset":
-        dataset = RLinfLeRobotObsDataset(
-            base_path=args.train_dataset_base_path,
-            repeat=args.dataset_repeat,
-            action_dim=args.action_dim,
-        )
-        val_dataset = RLinfLeRobotObsDataset(
             base_path=args.val_dataset_base_path,
             repeat=1,
             action_dim=args.action_dim,
@@ -237,9 +191,7 @@ if __name__ == "__main__":
         extra_inputs=args.extra_inputs,
         max_timestep_boundary=args.max_timestep_boundary,
         min_timestep_boundary=args.min_timestep_boundary,
-        context_noise_sigma=args.context_noise_sigma, 
         static_video_prob=args.static_video_prob, 
-        use_wow_checkpoint=args.use_wow_checkpoint, 
         action_dim=args.action_dim,
     )
     model_logger = ModelLogger(
