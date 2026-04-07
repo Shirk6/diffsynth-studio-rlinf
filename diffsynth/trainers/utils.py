@@ -1,7 +1,7 @@
 
 from __future__ import annotations
 
-import os, torch, argparse, json
+import imageio, os, torch, warnings, torchvision, argparse, json, ast
 from ..utils import ModelConfig
 from ..models.utils import load_state_dict
 from peft import LoraConfig, inject_adapter_in_model
@@ -11,6 +11,17 @@ from tqdm import tqdm
 from accelerate import Accelerator
 from accelerate.utils import DistributedDataParallelKwargs
 from torch.utils.tensorboard import SummaryWriter
+import numpy as np
+from typing import Tuple, Optional
+
+from torch.utils.data import Dataset
+from collections import OrderedDict
+from pydantic import BaseModel, Field
+
+from .dataset import (
+    RLinfDataset,
+    SimpleVLARealWorldRLinfDataset,
+)
 
 
 class DiffusionTrainingModule(torch.nn.Module):

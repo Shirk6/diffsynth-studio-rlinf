@@ -123,10 +123,12 @@ for lora_path, lora_name in lora_rows:
                 "input_image": input_image,
                 "input_image4": input_image4,
                 "action": action,
+                "height": 256, "width": 256,
                 "num_frames": window + 4,
                 "num_inference_steps": steps,
                 "cfg_scale": cfg_scale,
                 "sigma_shift": shift,
+                "bs_1": True,
             }
             if tea_thresh > 0:
                 raise NotImplementedError('已不支持')
