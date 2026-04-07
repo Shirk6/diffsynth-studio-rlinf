@@ -255,7 +255,7 @@ class WanVideoPipeline(BasePipeline):
 
         inputs["latents"] = self.scheduler.add_noise(inputs["input_latents"], inputs["noise"], timestep)
 
-        if (self.dit.TI2V1 or self.dit.TI2V2 or self.dit.TI2V3) and self.dit.one_frame_condition:
+        if self.dit.has_action_mode and self.dit.one_frame_condition:
             raise NotImplementedError("已弃用，请迁移至[five_frame_condition]")
             rand_idx = torch.tensor([max(0, len(self.scheduler.timesteps) - 50)])
             small_timestep = self.scheduler.timesteps[rand_idx].to(dtype=self.torch_dtype, device=self.device)
@@ -267,7 +267,7 @@ class WanVideoPipeline(BasePipeline):
             
             inputs["latents"][:, :, 0:1] = first_frame_noisy
         # ==============================================================
-        if (self.dit.TI2V1 or self.dit.TI2V2 or self.dit.TI2V3) and self.dit.five_frame_condition:
+        if self.dit.has_action_mode and self.dit.five_frame_condition:
             inputs["latents"][:, :, 0:1] = inputs["input_latents"][:, :, 0:1]
             
 
@@ -281,7 +281,6 @@ class WanVideoPipeline(BasePipeline):
             context_frames_noisy = self.scheduler.add_noise(context_frames_input, context_frames_noise, small_timestep)
             inputs["latents"][:, :, 1:2] = context_frames_noisy
 
-
         training_target = self.scheduler.training_target(inputs["input_latents"], inputs["noise"], timestep)
         for name, t in [
             ("input_latents", inputs["input_latents"]),
@@ -293,7 +292,7 @@ class WanVideoPipeline(BasePipeline):
         noise_pred = self.model_fn(**inputs, timestep=timestep)
         assert torch.isfinite(noise_pred).all(), f"noise_pred has NaN/Inf, min={noise_pred.min()}, max={noise_pred.max()}"
 
-        if (self.dit.TI2V1 or self.dit.TI2V2 or self.dit.TI2V3):
+        if self.dit.has_action_mode:
             loss = torch.nn.functional.mse_loss(noise_pred.float(), training_target.float(), reduction='none')
             
             mask = torch.zeros_like(loss)
@@ -1659,11 +1658,26 @@ def model_fn_wan_video(
     use_gradient_checkpointing_offload: bool = False,
     control_camera_latents_input = None,
     fuse_vae_embedding_in_latents: bool = False,
-    model_type="Wan2.1-T2V-14B",
     **kwargs,
 ):
 
     bs_1 = True if len(action.shape) == 2 else False
+
+    if bs_1:
+        T = action.shape[0]
+    else:
+        T = action.shape[1]
+
+    print("action shape is ", action.shape)
+
+    # bs_1 is True means in the training process, the action is a single frame
+    # bs_1 is False means in the inference process, the action is a sequence of frames
+
+    # action shape is [B, T, action_dim] or [T, action_dim]
+    # For action_mlp2 we group every 4 frames, so pad T to
+    # the nearest multiple of 4 when needed.
+
+    
 
     if sliding_window_size is not None and sliding_window_stride is not None:
         model_kwargs = dict(
@@ -1724,16 +1738,12 @@ def model_fn_wan_video(
                                             get_sequence_parallel_world_size,
                                             get_sp_group)
 
-
-    
     # Motion Controller
     if motion_bucket_id is not None and motion_controller is not None:
         t_mod = t_mod + motion_controller(motion_bucket_id).unflatten(1, (6, dit.dim))
 
     analysis_collector = kwargs.get("analysis_collector", None)
     x = latents
-
-
     # Image Embedding
     
     if y is not None and dit.require_vae_embedding:
@@ -1746,22 +1756,21 @@ def model_fn_wan_video(
             context = clip_embdding
 
     action_raw = action.clone()
-    if dit.I2V or dit.TI2V2 or dit.TI2V1:
+    if dit.enable_action_crossattn:
         if isinstance(action, np.ndarray):
             action = torch.from_numpy(action)
         action = action.to(dtype=x.dtype, device=x.device)
         if action.dim() == 2:
             action = action.unsqueeze(0)
+        # [B, T, action_dim] -> [B, T, dim]
         action_emb = dit.action_mlp1(action)
         if context is not None:
             context = torch.cat([context, action_emb], dim=1)
         else:
             context = action_emb
 
-    if context is None and dit.TI2V3:
+    if context is None and dit.action_mode == "modulation":
         context = torch.zeros(x.shape[0], 1, dit.dim, dtype=x.dtype, device=x.device)
-    
-
 
     assert torch.isfinite(latents).all(), "latents has NaN/Inf"
     assert torch.isfinite(timestep).all(), "timestep has NaN/Inf"
@@ -1772,8 +1781,9 @@ def model_fn_wan_video(
     # Camera control
     x = dit.patchify(x, control_camera_latents_input)
 
-
-    if dit.TI2V2 or dit.TI2V3:
+    action_emb = None
+    if dit.enable_action_modulation:
+        # FOR EVALUATION
         if not bs_1:
             action = action_raw
             if isinstance(action, np.ndarray):
@@ -1782,52 +1792,63 @@ def model_fn_wan_video(
             action = action.to(dtype=context.dtype, device=context.device)
             B, T, D = action.shape
 
-            first = action[:, 0:1, :]          # [B, 1, D]
-            first = first.repeat(1, 3, 1)      # [B, 3, D]
+            padding_length = (4 - (T % 4)) % 4
+            # use first action padding
+            # first_action = action[:, 0:1, :]  # (B, 1, D)
+            # padding_action = first_action.expand(B, padding_length, D)
 
-            action = torch.cat([first, action], dim=1)  # [B, T+3, D]
+            # use zero action padding
+            if padding_length > 0:
+                padding_action = torch.zeros(B, padding_length, D, dtype=action.dtype, device=action.device)
+                action = torch.cat([padding_action, action], dim=1)
             B, T4, D4 = action.shape
             action = action.reshape(B, T4 // 4, D4 * 4)
             action_emb = dit.action_mlp2(action)
-
+        # FOR TRAINING
         elif bs_1:
             action = action_raw
             if isinstance(action, np.ndarray):
                 action = torch.from_numpy(action)
             action = action.to(dtype=context.dtype, device=context.device)
-            action = torch.cat([action[0:1].repeat(3,1), action], dim=0)
-            action = action.reshape(x.shape[2],-1)
-            assert torch.isfinite(action).all(), f"action input has NaN/Inf. Shape: {action.shape}, min: {action.min()}, max: {action.max()}"
+            T, D = action.shape
+            padding_length = (4 - (T % 4)) % 4
+            # use first action to padding
+            # first_action = action[0:1, :]  # (1, D)
+            # padding_action = first_action.expand(padding_length, D)
+            # use zero action padding
+            if padding_length > 0:
+                padding_action = torch.zeros(padding_length, D, dtype=action.dtype, device=action.device)
+                action = torch.cat([padding_action, action], dim=0)
+            T4, D4 = action.shape
+            action = action.reshape(T4 // 4, D4 * 4)
             action_emb = dit.action_mlp2(action)
 
+    if action_emb is not None:
+        assert torch.isfinite(action_emb).all(), "action_emb has NaN/Inf"
+
     if dit.seperated_timestep and fuse_vae_embedding_in_latents and dit.one_frame_condition:
-        raise NotImplementedError("已弃用，请迁移至[five_frame_condition]")
-        timestep = torch.concat([
-            torch.zeros((1, latents.shape[3] * latents.shape[4] // 4), dtype=latents.dtype, device=latents.device),
-            torch.ones((latents.shape[2] - 1, latents.shape[3] * latents.shape[4] // 4), dtype=latents.dtype, device=latents.device) * timestep
-        ]).flatten()
-        t = dit.time_embedding(sinusoidal_embedding_1d(dit.freq_dim, timestep).unsqueeze(0))
-
-        if dit.TI2V2 or dit.TI2V3:
-            action_emb = action_emb.unsqueeze(0) # [1, T, 3072]
-            action_emb = action_emb.unsqueeze(2).repeat(1,1,64,1).flatten(1,2)
-            t = t + action_emb
-
-        if use_unified_sequence_parallel and dist.is_initialized() and dist.get_world_size() > 1:
-            t_chunks = torch.chunk(t, get_sequence_parallel_world_size(), dim=1)
-            t_chunks = [torch.nn.functional.pad(chunk, (0, 0, 0, t_chunks[0].shape[1]-chunk.shape[1]), value=0) for chunk in t_chunks]
-            t = t_chunks[get_sequence_parallel_rank()]
-        t_mod = dit.time_projection(t).unflatten(2, (6, dit.dim))
-        # print(f't_mod shape: {t_mod.shape}')
+        raise NotImplementedError("one_frame_condition is not supported")
     elif dit.seperated_timestep and fuse_vae_embedding_in_latents and dit.five_frame_condition:
+        # action_mlp2 outputs one token per 4-frame group.
+        # To align action tokens with timestep tokens, each temporal token needs to be
+        # expanded across all spatial patch positions per frame:
+        #   spatial_expand = (latent_h / patch_h) * (latent_w / patch_w)
+        patch_h, patch_w = dit.patch_size[1], dit.patch_size[2]
+        assert latents.shape[3] % patch_h == 0 and latents.shape[4] % patch_w == 0, (
+            f"Latent spatial size ({latents.shape[3]}, {latents.shape[4]}) must be divisible "
+            f"by patch size ({patch_h}, {patch_w})."
+        )
+        spatial_expand = (latents.shape[3] // patch_h) * (latents.shape[4] // patch_w)
+        print("spatial_expand is ", spatial_expand)
+
         if not bs_1:
             timestep = torch.concat([
                 torch.zeros((2, latents.shape[3] * latents.shape[4] // 4), dtype=latents.dtype, device=latents.device),
                 torch.ones((latents.shape[2] - 2, latents.shape[3] * latents.shape[4] // 4), dtype=latents.dtype, device=latents.device) * timestep
             ]).flatten()
             t = dit.time_embedding(sinusoidal_embedding_1d(dit.freq_dim, timestep).unsqueeze(0)).repeat(B, 1, 1)
-            if dit.TI2V2 or dit.TI2V3:
-                action_emb = action_emb.unsqueeze(2).repeat(1,1,64,1).flatten(1,2)
+            if dit.enable_action_modulation:
+                action_emb = action_emb.unsqueeze(2).repeat(1, 1, spatial_expand, 1).flatten(1, 2)
                 t = t + action_emb
             t_mod = dit.time_projection(t).unflatten(2, (6, dit.dim))
         elif bs_1:
@@ -1837,9 +1858,16 @@ def model_fn_wan_video(
             ]).flatten()
             t = dit.time_embedding(sinusoidal_embedding_1d(dit.freq_dim, timestep).unsqueeze(0))
 
-            if dit.TI2V2 or dit.TI2V3:
+            print("t shape is ", t.shape)
+            print("dit.freq_dim is ", dit.freq_dim)
+            print("timestep shape is ", timestep.shape)
+            print("latents shape is ", latents.shape)
+
+            if dit.enable_action_modulation:
                 action_emb = action_emb.unsqueeze(0) # [1, T, 3072]
+                print("action_emb shape is ", action_emb.shape)
                 action_emb = action_emb.unsqueeze(2).repeat(1,1,64,1).flatten(1,2)
+                print("action_emb shape is ", action_emb.shape)
                 t = t + action_emb
             t_mod = dit.time_projection(t).unflatten(2, (6, dit.dim))
     else:
@@ -1977,7 +2005,7 @@ def model_fn_wan_video(
                     )
                 else:
                     # print(f'normal block forward, block id: {block_id}')
-                    if dit.TI2V2 or dit.TI2V1 or dit.TI2V3:
+                    if dit.has_action_mode:
                         x = block(x, context, t_mod, freqs)
                     elif dit.I2V:
                         raise NotImplementedError("已弃用，请迁移至[TI2V]")

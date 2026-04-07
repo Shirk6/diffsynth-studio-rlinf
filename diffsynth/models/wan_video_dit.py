@@ -378,12 +378,15 @@ class WanModel(torch.nn.Module):
         require_vae_embedding: bool = True,
         require_clip_embedding: bool = True,
         fuse_vae_embedding_in_latents: bool = False,
-        TI2V2: bool = False,
-        TI2V1: bool = False,
-        TI2V3: bool = False,
+        # TI2V2: Optional[bool] = None,  # deprecated
+        # TI2V1: Optional[bool] = None,  # deprecated
+        # TI2V3: Optional[bool] = None,  # deprecated
         I2V: bool = False,
-        five_frame_condition: bool = True,
-        one_frame_condition: bool = False
+        # five_frame_condition: Optional[bool] = None,  # deprecated
+        # one_frame_condition: Optional[bool] = None,   # deprecated
+        action_mode: str = "both",
+        length_conditonal_frames: int = 5,
+        action_dim: int = 7,
     ):
         super().__init__()
         self.dim = dim
@@ -395,34 +398,55 @@ class WanModel(torch.nn.Module):
         self.require_vae_embedding = require_vae_embedding
         self.require_clip_embedding = require_clip_embedding
         self.fuse_vae_embedding_in_latents = fuse_vae_embedding_in_latents
-        self.TI2V1 = False # action只通过crossattn注入
-        self.TI2V2 = True # action通过crossattn和modulation注入
-        self.TI2V3 = False # action只通过modulation注入
-        self.TI2V4 = False # action和图像拼接
-        self.I2V = False
-        self.five_frame_condition = True
-        self.one_frame_condition = False
-        print(f"The MODE is TI2V4:{self.TI2V4}")
-        print(f"The MODE is TI2V3:{self.TI2V3}")
-        print(f"The MODE is TI2V2:{self.TI2V2}")
-        print(f"The MODE is TI2V1:{self.TI2V1}")
-        print(f'THE MODE is five_frame_condition:{self.five_frame_condition}')
-        print(f'THE MODE is one_frame_condition:{self.one_frame_condition}')
-        if I2V or TI2V2 or TI2V1:
+        # if action_mode is None:
+        #     # Backward compatibility for deprecated TI2V flags.
+        #     if TI2V2:
+        #         action_mode = "both"
+        #     elif TI2V1:
+        #         action_mode = "crossattn"
+        #     elif TI2V3:
+        #         action_mode = "modulation"
+        #     else:
+        #         action_mode = "both"
+        if action_mode not in {"crossattn", "modulation", "both"}:
+            raise ValueError(f"Unsupported action_mode: {action_mode}")
+        self.action_mode = action_mode
+        self.has_action_mode = True
+        self.enable_action_crossattn = self.action_mode in {"crossattn", "both"}
+        self.enable_action_modulation = self.action_mode in {"modulation", "both"}
+
+        # if length_conditonal_frames is None:
+        #     # Backward compatibility for deprecated frame flags.
+        #     if one_frame_condition:
+        #         length_conditonal_frames = 1
+        #     elif five_frame_condition:
+        #         length_conditonal_frames = 5
+        #     else:
+        #         length_conditonal_frames = 5
+        if length_conditonal_frames not in {1, 5}:
+            raise ValueError(
+                f"Unsupported length_conditonal_frames: {length_conditonal_frames}, expected 1 or 5."
+            )
+        self.length_conditonal_frames = length_conditonal_frames
+        self.one_frame_condition = self.length_conditonal_frames == 1
+        self.five_frame_condition = self.length_conditonal_frames == 5
+      
+        print(f"The MODE of action control is {self.action_mode}")
+        print(f'The MODE of length conditional frames is {self.length_conditonal_frames}')
+
+        if self.enable_action_crossattn:
             self.action_mlp1 = nn.Sequential(
-                nn.Linear(7, dim),
+                nn.Linear(action_dim, dim),
                 nn.GELU(),
                 nn.Linear(dim, dim)
             )
- 
 
-        if TI2V2 or TI2V3:
+        if self.enable_action_modulation:
             self.action_mlp2 = nn.Sequential(
-                nn.Linear(28, 4 * dim),
+                nn.Linear(action_dim * 4, 4 * dim),
                 nn.SiLU(),
                 nn.Linear(4 * dim, dim)
             )
-
 
         self.patch_embedding = nn.Conv3d(
             in_dim, dim, kernel_size=patch_size, stride=patch_size)
@@ -641,6 +665,7 @@ class WanModelStateDictConverter:
         return state_dict_, config
     
     def from_civitai(self, state_dict):
+        action_dim_override = int(os.environ.get("WAN_ACTION_DIM", "7"))
         state_dict = {name: param for name, param in state_dict.items() if not name.startswith("vace")}
         state_dict = {name: param for name, param in state_dict.items() if name.split(".")[0] not in ["pose_patch_embedding", "face_adapter", "face_encoder", "motion_encoder"]}
         state_dict_ = {}
@@ -1089,9 +1114,31 @@ class WanModelStateDictConverter:
                 "require_clip_embedding": False,
                 "require_vae_embedding": False,
                 "fuse_vae_embedding_in_latents": True,
-                "TI2V2": True,
-                "TI2V1": False,
-                "TI2V3": False,
+                "action_mode": "both",
+                "length_conditonal_frames": 5,
+                "action_dim": action_dim_override,
+            }
+        elif hash_state_dict_keys(state_dict) == "fcc43a93949201bafeb34aa1eb8bc50f":
+            # Wan-AI/Wan2.2-TI2V-5B-agx
+            config = {
+                "has_image_input": False,
+                "patch_size": [1, 2, 2],
+                "in_dim": 48,
+                "dim": 3072,
+                "ffn_dim": 14336,
+                "freq_dim": 256,
+                "text_dim": 4096,
+                "out_dim": 48,
+                "num_heads": 24,
+                "num_layers": 30,
+                "eps": 1e-6,
+                "seperated_timestep": True,
+                "require_clip_embedding": False,
+                "require_vae_embedding": False,
+                "fuse_vae_embedding_in_latents": True,
+                "action_mode": "both",
+                "length_conditonal_frames": 5,
+                "action_dim": 10,
             }
         elif hash_state_dict_keys(state_dict) == "bc4824aef7c3f23d3378cec6e2b1316c":
             # Wan-AI/Wan2.2-TI2V-5B 去掉了action_scale
@@ -1111,9 +1158,9 @@ class WanModelStateDictConverter:
                 "require_clip_embedding": False,
                 "require_vae_embedding": False,
                 "fuse_vae_embedding_in_latents": True,
-                "TI2V2": True,
-                "TI2V1": False,
-                "TI2V3": False,
+                "action_mode": "both",
+                "length_conditonal_frames": 5,
+                "action_dim": action_dim_override,
             }
         elif hash_state_dict_keys(state_dict) == "0c81d47223c50d8d74106f79310ae207":
             # Wan-AI/Wan2.2-TI2V-5B-action-singleckpt
@@ -1133,9 +1180,9 @@ class WanModelStateDictConverter:
                 "require_clip_embedding": False,
                 "require_vae_embedding": False,
                 "fuse_vae_embedding_in_latents": True,
-                "TI2V1": False,
-                "TI2V2": True,
-                "TI2V3": False,
+                "action_mode": "both",
+                "length_conditonal_frames": 5,
+                "action_dim": action_dim_override,
             }
         elif hash_state_dict_keys(state_dict) == "3f4e37438f72ef88cd27b161fd1b193c":
             # Wan-AI/Wan2.2-TI2V-5B-action-singleckpt-1
@@ -1155,9 +1202,9 @@ class WanModelStateDictConverter:
                 "require_clip_embedding": False,
                 "require_vae_embedding": False,
                 "fuse_vae_embedding_in_latents": True,
-                "TI2V1": True,
-                "TI2V2": False,
-                "TI2V3": False,
+                "action_mode": "crossattn",
+                "length_conditonal_frames": 5,
+                "action_dim": action_dim_override,
             }
         elif hash_state_dict_keys(state_dict) == "6efc7e19e87c1755f17dec14be3d0bf1":
             # Wan-AI/Wan2.2-TI2V-5B-action-singleckpt-3
@@ -1177,11 +1224,11 @@ class WanModelStateDictConverter:
                 "require_clip_embedding": False,
                 "require_vae_embedding": False,
                 "fuse_vae_embedding_in_latents": True,
-                "TI2V1": False,
-                "TI2V2": False,
-                "TI2V3": True,
+                "action_mode": "modulation",
+                "length_conditonal_frames": 5,
                 "TEMP9": False,
-                "TEMP13": True
+                "TEMP13": True,
+                "action_dim": action_dim_override,
             }
         elif hash_state_dict_keys(state_dict) == "d3abb829857dff2d9129d2f396a7eace":
             # Wan-AI/Wan2.2-TI2V-5B-action-singleckpt-3
@@ -1201,9 +1248,9 @@ class WanModelStateDictConverter:
                 "require_clip_embedding": False,
                 "require_vae_embedding": False,
                 "fuse_vae_embedding_in_latents": True,
-                "TI2V1": False,
-                "TI2V2": False,
-                "TI2V3": True,
+                "action_mode": "modulation",
+                "length_conditonal_frames": 5,
+                "action_dim": action_dim_override,
             }
         elif hash_state_dict_keys(state_dict) == "5b013604280dd715f8457c6ed6d6a626":
             # Wan-AI/Wan2.2-I2V-A14B

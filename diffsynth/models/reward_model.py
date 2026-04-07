@@ -58,11 +58,25 @@ LIBERO_OBJECT_TASKS = {
     9: "pick up the tomato sauce and place it in the basket",
 }
 
+FRANKA_REAL_WORLD_TASKS = {
+    0: "pick the banana",
+    1: "pick the bread",
+    2: "pull the drawer",
+}
+
+AGX_REAL_WORLD_TASKS = {
+    0: "use agilex robot to fold the towel",
+    1: "use agilex robot to pick the cube",
+    2: "use agilex robot to pick the tomato",
+}
+
 # 反向字典：从任务描述到任务 ID
 LIBERO_GOAL_TASK_TO_ID = {v: k for k, v in LIBERO_GOAL_TASKS.items()}
 LIBERO_10_TASK_TO_ID = {v: k for k, v in LIBERO_10_TASKS.items()}
 LIBERO_SPATIAL_TASK_TO_ID = {v: k for k, v in LIBERO_SPATIAL_TASKS.items()}
 LIBERO_OBJECT_TASK_TO_ID = {v: k for k, v in LIBERO_OBJECT_TASKS.items()}
+FRANKA_REAL_WORLD_TASK_TO_ID = {v: k for k,v in FRANKA_REAL_WORLD_TASKS.items()}
+AGX_REAL_WORLD_TASK_TO_ID = {v: k for k,v in AGX_REAL_WORLD_TASKS.items()}
 
 
 def instruction_to_task_id(instructions, task_suite_name="libero_goal"):
@@ -89,6 +103,10 @@ def instruction_to_task_id(instructions, task_suite_name="libero_goal"):
         task_to_id = LIBERO_SPATIAL_TASK_TO_ID
     elif task_suite_name == "libero_object":
         task_to_id = LIBERO_OBJECT_TASK_TO_ID
+    elif task_suite_name == "franka_3tasks":
+        task_to_id = FRANKA_REAL_WORLD_TASK_TO_ID
+    elif task_suite_name == "agx_3tasks":
+        task_to_id = AGX_REAL_WORLD_TASK_TO_ID
     else:
         raise ValueError(f"Unknown task suite name: '{task_suite_name}'. Valid task suites: libero_goal, libero_object")
 

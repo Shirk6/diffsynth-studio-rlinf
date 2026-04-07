@@ -3,4 +3,8 @@ diffsynth.egg-info/
 __pycache__
 *.pyc
 
-outputs/
+outputs/*
+runs/*
+
+extra_libs*
+diffsynth/models/install_extra_libs.sh

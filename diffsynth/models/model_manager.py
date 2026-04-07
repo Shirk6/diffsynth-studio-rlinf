@@ -1,7 +1,7 @@
 import os, torch, json, importlib
 from typing import List
 
-from .downloader import download_models, download_customized_models, Preset_model_id, Preset_model_website
+from .downloader import download_customized_models, Preset_model_website
 
 from .sd_text_encoder import SDTextEncoder
 from .sd_unet import SDUNet
@@ -49,7 +49,7 @@ from .cog_dit import CogDiT
 from ..extensions.RIFE import IFNet
 from ..extensions.ESRGAN import RRDBNet
 
-from ..configs.model_config import model_loader_configs, huggingface_model_loader_configs, patch_model_loader_configs
+from ..configs.model_config import model_loader_configs
 from .utils import load_state_dict, init_weights_on_device, hash_state_dict_keys, split_state_dict_with_prefix
 import math
 def debug_state_dict_mismatch(model, model_state_dict):
@@ -112,7 +112,7 @@ def load_model_from_single_file(state_dict, model_names, model_classes, model_re
         model = model.to_empty(device=device)
         # debug_state_dict_mismatch(model, model_state_dict)
         model.load_state_dict(model_state_dict, strict=False, assign=True)
-        # 如果模型有action_mlp1属性，则初始化它,这个应该仅在训练时生效
+        # if model has action_mlp1，then initialize it, should only be used in training
         if hasattr(model, "action_mlp1"):
             print("    Checking action_mlp1 weights for NaN/Inf...")
             need_init1 = False
@@ -136,7 +136,7 @@ def load_model_from_single_file(state_dict, model_names, model_classes, model_re
             else:
                 print("    action_mlp1 weights are fine, keeping original values.")
 
-        # 如果模型有action_mlp2属性，则初始化它,这个应该仅在训练时生效
+        # if model has action_mlp2，then initialize it, should only be used in training
         if hasattr(model, "action_mlp2"):
             print("    Checking action_mlp2 weights for NaN/Inf...")
             need_init2 = False
@@ -412,7 +412,7 @@ class ModelManager:
         self,
         torch_dtype=torch.float16,
         device="cuda",
-        model_id_list: List[Preset_model_id] = [],
+        model_id_list = [],
         downloading_priority: List[Preset_model_website] = ["ModelScope", "HuggingFace"],
         file_path_list: List[str] = [],
     ):
@@ -421,15 +421,14 @@ class ModelManager:
         self.model = []
         self.model_path = []
         self.model_name = []
-        downloaded_files = download_models(model_id_list, downloading_priority) if len(model_id_list) > 0 else []
+        print(f"model_id_list: {model_id_list}")
+        print(f"downloading_priority: {downloading_priority}")
+        print(f"file_path_list: {file_path_list}")
         self.model_detector = [
             ModelDetectorFromSingleFile(model_loader_configs),
             ModelDetectorFromSplitedSingleFile(model_loader_configs),
-            ModelDetectorFromHuggingfaceFolder(huggingface_model_loader_configs),
-            ModelDetectorFromPatchedSingleFile(patch_model_loader_configs),
         ]
-        self.load_models(downloaded_files + file_path_list)
-
+        self.load_models(file_path_list)
 
     def load_model_from_single_file(self, file_path="", state_dict={}, model_names=[], model_classes=[], model_resource=None):
         print(f"Loading models from file: {file_path}")

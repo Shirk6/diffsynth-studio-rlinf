@@ -1,10 +1,11 @@
-import torch, os, json
+import torch, os, json, ast
 import numpy as np
 from PIL import Image
 from diffsynth import load_state_dict
 from diffsynth.pipelines.wan_video_new import WanVideoPipeline, ModelConfig
 from diffsynth.trainers.utils import DiffusionTrainingModule, ModelLogger, launch_training_task, wan_parser
-from diffsynth.trainers.utils import RLinfNpyDataset
+from diffsynth.trainers.utils import RLinfNpyDataset, RLinfDataset, RLinfLeRobotObsDataset
+from diffsynth.trainers.utils import SimpleVLARealWorldRLinfDataset
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # --- Patch Start: 允许加载包含 set 的权重文件 ---
@@ -30,6 +31,7 @@ class WanTrainingModule(DiffusionTrainingModule):
         context_noise_sigma=0.0, # 新增参数
         static_video_prob=0.0, # 新增参数
         use_wow_checkpoint=False, # 新增参数
+        action_dim=7,
     ):
         super().__init__()
         # Load models
@@ -68,7 +70,7 @@ class WanTrainingModule(DiffusionTrainingModule):
         self.min_timestep_boundary = min_timestep_boundary
         self.context_noise_sigma = context_noise_sigma # 保存参数
         self.static_video_prob = static_video_prob # 保存参数
-
+        
         
     def forward_preprocess(self, data):
         # === 新增：静态样本增强 ===
@@ -78,7 +80,7 @@ class WanTrainingModule(DiffusionTrainingModule):
             data["video"] = [first_frame] * len(data["video"])
             if "action" in data:
                 data["action"] = torch.zeros_like(data["action"])
-                data["action"][:,-1] = -1  # 最后一维设为 -1
+                # data["action"][:,-1] = -1  # 最后一维设为 -1
         # ============================
         # CFG-sensitive parameters
         # inputs_posi = {"prompt": data["prompt"]}
@@ -147,18 +149,77 @@ if __name__ == "__main__":
     parser.add_argument("--use_wow_checkpoint", action="store_true",help="Whether to load the WoW checkpoint to overwrite the base model weights.")
     parser.add_argument("--val_interval", type=int, default=5, help="Validation interval in epochs")
     parser.add_argument("--dataset",type=str,default="RLinfNpyDataset",help="Dataset type for training")
+    parser.add_argument("--action_dim", type=int, default=7, help="Action dimension for dataset and hash-based WanModel config override.")
+    parser.add_argument("--val_dataset_base_path", type=str, default="[]", help="Validation dataset base paths in JSON list format.")
+    parser.add_argument("--train_dataset_base_path", type=str, default="[]", help="Training dataset base paths in JSON list format.")
     args = parser.parse_args()
+
+    def _parse_path_list(arg_value, arg_name):
+        if isinstance(arg_value, list):
+            return arg_value
+        if isinstance(arg_value, str):
+            try:
+                parsed = json.loads(arg_value)
+            except json.JSONDecodeError:
+                # Fallback for python-style list strings (e.g. trailing commas).
+                try:
+                    parsed = ast.literal_eval(arg_value)
+                except (ValueError, SyntaxError) as e:
+                    raise ValueError(
+                        f"{arg_name} must be a JSON/Python list string, got: {arg_value}"
+                    ) from e
+            if not isinstance(parsed, list) or not all(isinstance(x, str) for x in parsed):
+                raise ValueError(f"{arg_name} must be a JSON list of strings, got: {parsed}")
+            return parsed
+        raise ValueError(f"{arg_name} must be list[str] or JSON list string, got type {type(arg_value)}")
+
+    args.train_dataset_base_path = _parse_path_list(args.train_dataset_base_path, "--train_dataset_base_path")
+    args.val_dataset_base_path = _parse_path_list(args.val_dataset_base_path, "--val_dataset_base_path")
+    os.environ["WAN_ACTION_DIM"] = str(args.action_dim)
 
     if args.dataset == "RLinfNpyDataset":
         dataset = RLinfNpyDataset(
-            base_path=os.path.join(args.dataset_base_path, 'train_data'),
+            base_path=args.dataset_base_path,
             repeat=args.dataset_repeat,
             num_frames=args.num_frames,
         )
         val_dataset = RLinfNpyDataset(
-            base_path=os.path.join(args.dataset_base_path, 'val_data'),
+            base_path=args.val_dataset_base_path,
             repeat=1, 
             num_frames=args.num_frames 
+        )
+    elif args.dataset == "RLinfDataset":
+        dataset = RLinfDataset(
+            base_path=args.train_dataset_base_path,
+            repeat=args.dataset_repeat,
+            action_dim=args.action_dim,
+        )
+        val_dataset = RLinfDataset(
+            base_path=args.val_dataset_base_path,
+            repeat=1,
+            action_dim=args.action_dim,
+        )
+    elif args.dataset == "RLinfLeRobotObsDataset":
+        dataset = RLinfLeRobotObsDataset(
+            base_path=args.train_dataset_base_path,
+            repeat=args.dataset_repeat,
+            action_dim=args.action_dim,
+        )
+        val_dataset = RLinfLeRobotObsDataset(
+            base_path=args.val_dataset_base_path,
+            repeat=1,
+            action_dim=args.action_dim,
+        )
+    elif args.dataset == "SimpleVLARealWorldRLinfDataset":
+        dataset = SimpleVLARealWorldRLinfDataset(
+            base_path=args.train_dataset_base_path,
+            repeat=args.dataset_repeat,
+            action_dim=args.action_dim,
+        )
+        val_dataset = SimpleVLARealWorldRLinfDataset(
+            base_path=args.val_dataset_base_path,
+            repeat=1,
+            action_dim=args.action_dim,
         )
     else:
         raise NotImplementedError('this dataset type not implemented')
@@ -179,6 +240,7 @@ if __name__ == "__main__":
         context_noise_sigma=args.context_noise_sigma, 
         static_video_prob=args.static_video_prob, 
         use_wow_checkpoint=args.use_wow_checkpoint, 
+        action_dim=args.action_dim,
     )
     model_logger = ModelLogger(
         args.output_path,
