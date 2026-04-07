@@ -1,54 +1,6 @@
 import os, torch, json, importlib
 from typing import List
 
-from .downloader import download_customized_models, Preset_model_website
-
-from .sd_text_encoder import SDTextEncoder
-from .sd_unet import SDUNet
-from .sd_vae_encoder import SDVAEEncoder
-from .sd_vae_decoder import SDVAEDecoder
-from .lora import get_lora_loaders
-
-from .sdxl_text_encoder import SDXLTextEncoder, SDXLTextEncoder2
-from .sdxl_unet import SDXLUNet
-from .sdxl_vae_decoder import SDXLVAEDecoder
-from .sdxl_vae_encoder import SDXLVAEEncoder
-
-from .sd3_text_encoder import SD3TextEncoder1, SD3TextEncoder2, SD3TextEncoder3
-from .sd3_dit import SD3DiT
-from .sd3_vae_decoder import SD3VAEDecoder
-from .sd3_vae_encoder import SD3VAEEncoder
-
-from .sd_controlnet import SDControlNet
-from .sdxl_controlnet import SDXLControlNetUnion
-
-from .sd_motion import SDMotionModel
-from .sdxl_motion import SDXLMotionModel
-
-from .svd_image_encoder import SVDImageEncoder
-from .svd_unet import SVDUNet
-from .svd_vae_decoder import SVDVAEDecoder
-from .svd_vae_encoder import SVDVAEEncoder
-
-from .sd_ipadapter import SDIpAdapter, IpAdapterCLIPImageEmbedder
-from .sdxl_ipadapter import SDXLIpAdapter, IpAdapterXLCLIPImageEmbedder
-
-from .hunyuan_dit_text_encoder import HunyuanDiTCLIPTextEncoder, HunyuanDiTT5TextEncoder
-from .hunyuan_dit import HunyuanDiT
-from .hunyuan_video_vae_decoder import HunyuanVideoVAEDecoder
-from .hunyuan_video_vae_encoder import HunyuanVideoVAEEncoder
-
-from .flux_dit import FluxDiT
-from .flux_text_encoder import FluxTextEncoder2
-from .flux_vae import FluxVAEEncoder, FluxVAEDecoder
-from .flux_ipadapter import FluxIpAdapter
-
-from .cog_vae import CogVAEEncoder, CogVAEDecoder
-from .cog_dit import CogDiT
-
-from ..extensions.RIFE import IFNet
-from ..extensions.ESRGAN import RRDBNet
-
 from ..configs.model_config import model_loader_configs
 from .utils import load_state_dict, init_weights_on_device, hash_state_dict_keys, split_state_dict_with_prefix
 import math
@@ -413,7 +365,7 @@ class ModelManager:
         torch_dtype=torch.float16,
         device="cuda",
         model_id_list = [],
-        downloading_priority: List[Preset_model_website] = ["ModelScope", "HuggingFace"],
+        downloading_priority  = ["ModelScope", "HuggingFace"],
         file_path_list: List[str] = [],
     ):
         self.torch_dtype = torch_dtype
