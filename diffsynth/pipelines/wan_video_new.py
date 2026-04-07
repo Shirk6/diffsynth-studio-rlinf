@@ -31,135 +31,6 @@ from ..prompters import WanPrompter
 from ..vram_management import enable_vram_management, AutoWrappedModule, AutoWrappedLinear, WanAutoCastLayerNorm
 from ..lora import GeneralLoRALoader
 import time  
-import matplotlib
-matplotlib.use('Agg') 
-import matplotlib.pyplot as plt
-import seaborn as sns
-
-
-class L1AnalysisCollector:
-    """一个用于在推理过程中收集数据并计算相对L1距离的辅助类。"""
-    def __init__(self):
-        self.history = {}
-        # self.distances 存储当前正在进行的这一次推理的数据
-        self.distances = {}
-        # self.all_sessions 存储所有推理的历史数据： {"t_mod": [[run1_step1, ...], [run2_step1, ...]], ...}
-        self.all_sessions = {}
-        self.clear()
-
-    def clear(self):
-        self.history = {
-            "hidden_states_before_head": None,
-            "t_mod": None,
-            "model_residual": None,
-        }
-        self.distances = {
-            "hidden_states_before_head": [],
-            "t_mod": [],
-            "model_residual": [],
-        }
-        self.all_sessions = {}
-    def start_new_session(self):
-        """开始一次新的推理记录，将上一次的数据归档。"""
-        if any(len(v) > 0 for v in self.distances.values()):
-            for key, val in self.distances.items():
-                if key not in self.all_sessions:
-                    self.all_sessions[key] = []
-                self.all_sessions[key].append(val)
-        
-        self.history = {
-            "hidden_states_before_head": None,
-            "t_mod": None,
-            "model_residual": None,
-        }
-        self.distances = {
-            "hidden_states_before_head": [],
-            "t_mod": [],
-            "model_residual": [],
-        }
-    def update(self, step_name: str, current_tensor: torch.Tensor):
-        """
-        更新一个张量的状态，如果历史记录存在，则计算并存储L1距离。
-        """
-        if self.history.get(step_name) is not None:
-            previous_tensor = self.history[step_name]
-            
-            # 确保张量在同一设备上
-            current_tensor_cpu = current_tensor.detach().cpu().float()
-            previous_tensor_cpu = previous_tensor.detach().cpu().float()
-
-            # 计算相对L1距离
-            # 公式: ||curr - prev||_1 / ||prev||_1
-            # 这等价于: mean(abs(curr - prev)) / mean(abs(prev))
-            l1_diff = torch.linalg.norm((current_tensor_cpu - previous_tensor_cpu).flatten(), ord=1)
-            l1_norm_prev = torch.linalg.norm(previous_tensor_cpu.flatten(), ord=1)
-            
-            # 防止除以零
-            relative_l1 = (l1_diff / (l1_norm_prev + 1e-6)).item()
-            
-            # 【修改】如果 key 不存在，先初始化列表
-            if step_name not in self.distances:
-                self.distances[step_name] = []
-            self.distances[step_name].append(relative_l1)
-
-        # 更新历史记录为当前张量，为下一步做准备
-        self.history[step_name] = current_tensor.detach().clone()
-    def get_average_distances(self):
-        """计算多次推理的平均值和标准差。"""
-        # 先把当前正在进行的这次（如果还没归档）也归档进去
-        temp_sessions = self.all_sessions.copy()
-        if any(len(v) > 0 for v in self.distances.values()):
-            for key, val in self.distances.items():
-                if key not in temp_sessions:
-                    temp_sessions[key] = []
-                temp_sessions[key].append(val)
-        
-        avg_results = {}
-        std_results = {}
-        
-        for key, sessions in temp_sessions.items():
-            if not sessions:
-                continue
-            # 找出最小长度，对齐数据
-            min_len = min(len(s) for s in sessions)
-            # 截断并转换为 numpy 数组: [num_sessions, num_steps]
-            data_matrix = np.array([s[:min_len] for s in sessions])
-            
-            avg_results[key] = np.mean(data_matrix, axis=0)
-            std_results[key] = np.std(data_matrix, axis=0)
-            
-        return avg_results, std_results
-def plot_l1_distances(collector: L1AnalysisCollector, num_steps: int, save_path="l1_distance_analysis.png"):
-    """根据收集到的距离数据绘图并保存。支持多次推理平均。"""
-    avg_data, std_data = collector.get_average_distances()
-    
-    if not avg_data:
-        print("No data to plot.")
-        return
-
-    plt.style.use('seaborn-v0_8-whitegrid')
-    fig, ax = plt.subplots(1, 1, figsize=(12, 7))
-
-    first_key = list(avg_data.keys())[0]
-    actual_steps = len(avg_data[first_key])
-    diffusion_process_steps = np.linspace(0, 100, num=actual_steps)
-
-    for name, mean_vals in avg_data.items():
-        std_vals = std_data[name]
-        ax.plot(diffusion_process_steps, mean_vals, label=f"{name} (mean)", marker='o', markersize=3, linestyle='-')
-        ax.fill_between(diffusion_process_steps, mean_vals - std_vals, mean_vals + std_vals, alpha=0.2)
-
-    ax.set_xlabel("Diffusion Process (%)")
-    ax.set_ylabel("Relative L1 Distance")
-    ax.set_title(f"Relative L1 Distance (Averaged over {len(collector.all_sessions.get(first_key, [])) + 1} runs)")
-    ax.legend()
-    
-    plt.tight_layout()
-    plt.savefig(save_path)
-    plt.close(fig)
-    print(f"L1 distance analysis plot saved to: {save_path}")
-
-
 
 class WanVideoPipeline(BasePipeline):
 
@@ -214,8 +85,6 @@ class WanVideoPipeline(BasePipeline):
             WanVideoPostUnit_S2V(),
         ]
         self.model_fn = model_fn_wan_video
-        #【新增】初始化分析收集器
-        self.analysis_collector = L1AnalysisCollector()
 
     def load_lora(
         self,
@@ -682,24 +551,10 @@ class WanVideoPipeline(BasePipeline):
         tea_cache_model_id: Optional[str] = "",
         # progress_bar
         progress_bar_cmd=tqdm,
-        # 【新增】一个用于控制分析的参数
-        analyze_l1_distance: bool = False,
-        accumulate_analysis: bool = False, # 新增：是否累积多次推理数据
         # B
         batch_size: Optional[int] = None, 
         bs_1: bool = True,
     ):
-
-
-        # 【新增】如果需要分析，则清空收集器
-        if analyze_l1_distance:
-            if not accumulate_analysis:
-                # 如果不累积（单次模式），则完全清空
-                self.analysis_collector.clear()
-            else:
-                # 如果累积（多次模式），则开始新会话（归档旧数据）
-                self.analysis_collector.start_new_session()
-
         # Scheduler
         self.scheduler.set_timesteps(num_inference_steps, denoising_strength=denoising_strength, shift=sigma_shift)
         
@@ -709,8 +564,6 @@ class WanVideoPipeline(BasePipeline):
             "action": action,
             "vap_prompt": vap_prompt,
             "tea_cache_l1_thresh": tea_cache_l1_thresh, "tea_cache_model_id": tea_cache_model_id, "num_inference_steps": num_inference_steps,
-            # 【新增】传入 analysis_collector，仅在 positive pass 中记录
-            "analysis_collector": self.analysis_collector if analyze_l1_distance else None,
         }
         inputs_nega = {
             "negative_prompt": negative_prompt,
@@ -799,20 +652,6 @@ class WanVideoPipeline(BasePipeline):
         video = self.vae.decode(inputs_shared["latents"], device=self.device, tiled=tiled, tile_size=tile_size, tile_stride=tile_stride)
         video = self.vae_output_to_video(video)
         self.load_models_to_device([])
-
-        if analyze_l1_distance:
-            # 【修改】绘制并保存 L1 距离分析图
-            if analyze_l1_distance:
-                # 定义保存路径
-                mode_str = "accumulated" if accumulate_analysis else "single"
-                save_plot_path = f"teacache_analysis_{mode_str}.png"
-                
-                
-                plot_l1_distances(
-                    collector=self.analysis_collector, # 传入 collector 对象
-                    num_steps=num_inference_steps,
-                    save_path=save_plot_path
-                )
  
         return video
 
@@ -1660,6 +1499,18 @@ def model_fn_wan_video(
     fuse_vae_embedding_in_latents: bool = False,
     **kwargs,
 ):
+    # Debug switch priority:
+    # 1) explicit call arg: model_fn_wan_video(..., debug=True/False)
+    # 2) env var WAN_DEBUG=1/true/yes/on
+    debug = kwargs.get("debug", None)
+    if debug is None:
+        debug = str(os.environ.get("WAN_DEBUG", "0")).lower() in {"1", "true", "yes", "on"}
+    else:
+        debug = bool(debug)
+
+    def debug_print(*args, **kwargs_):
+        if debug:
+            print(*args, **kwargs_)
 
     bs_1 = True if len(action.shape) == 2 else False
 
@@ -1668,7 +1519,7 @@ def model_fn_wan_video(
     else:
         T = action.shape[1]
 
-    print("action shape is ", action.shape)
+    debug_print("action shape is ", action.shape)
 
     # bs_1 is True means in the training process, the action is a single frame
     # bs_1 is False means in the inference process, the action is a sequence of frames
@@ -1839,7 +1690,6 @@ def model_fn_wan_video(
             f"by patch size ({patch_h}, {patch_w})."
         )
         spatial_expand = (latents.shape[3] // patch_h) * (latents.shape[4] // patch_w)
-        print("spatial_expand is ", spatial_expand)
 
         if not bs_1:
             timestep = torch.concat([
@@ -1858,16 +1708,14 @@ def model_fn_wan_video(
             ]).flatten()
             t = dit.time_embedding(sinusoidal_embedding_1d(dit.freq_dim, timestep).unsqueeze(0))
 
-            print("t shape is ", t.shape)
-            print("dit.freq_dim is ", dit.freq_dim)
-            print("timestep shape is ", timestep.shape)
-            print("latents shape is ", latents.shape)
+            debug_print("t shape is ", t.shape)
+            debug_print("dit.freq_dim is ", dit.freq_dim)
+            debug_print("timestep shape is ", timestep.shape)
+            debug_print("latents shape is ", latents.shape)
 
             if dit.enable_action_modulation:
                 action_emb = action_emb.unsqueeze(0) # [1, T, 3072]
-                print("action_emb shape is ", action_emb.shape)
-                action_emb = action_emb.unsqueeze(2).repeat(1,1,64,1).flatten(1,2)
-                print("action_emb shape is ", action_emb.shape)
+                action_emb = action_emb.unsqueeze(2).repeat(1, 1, spatial_expand, 1).flatten(1,2)
                 t = t + action_emb
             t_mod = dit.time_projection(t).unflatten(2, (6, dit.dim))
     else:
@@ -1948,14 +1796,14 @@ def model_fn_wan_video(
     
     # blocks
     if use_unified_sequence_parallel:
-        print('use unified sequence parallel')
+        debug_print('use unified sequence parallel')
         if dist.is_initialized() and dist.get_world_size() > 1:
             chunks = torch.chunk(x, get_sequence_parallel_world_size(), dim=1)
             pad_shape = chunks[0].shape[1] - chunks[-1].shape[1]
             chunks = [torch.nn.functional.pad(chunk, (0, 0, 0, chunks[0].shape[1]-chunk.shape[1]), value=0) for chunk in chunks]
             x = chunks[get_sequence_parallel_rank()]
     if tea_cache_update:
-        print('use tea cache to skip computation')
+        debug_print('use tea cache to skip computation')
         x = tea_cache.update(x)
     else:
         # print('normal forward')
@@ -2023,12 +1871,12 @@ def model_fn_wan_video(
                 x = animate_adapter.after_transformer_block(block_id, x, motion_vec)
 
             t_layer_end = time.time()
-            if (t_layer_end - t_layer_start) > 0.5: 
-                print(f"  [ModelFn] Block {block_id} slow: {t_layer_end - t_layer_start:.4f}s")
+            if (t_layer_end - t_layer_start) > 0.5:
+                debug_print(f"  [ModelFn] Block {block_id} slow: {t_layer_end - t_layer_start:.4f}s")
         if tea_cache is not None:
             tea_cache.store(x)
     if analysis_collector is not None:
-        print(f'x_input_for_residual shape: {x_input_for_residual.shape}, x shape: {x.shape}')
+        debug_print(f'x_input_for_residual shape: {x_input_for_residual.shape}, x shape: {x.shape}')
         model_residual = x - x_input_for_residual
         analysis_collector.update("model_residual", model_residual)
         analysis_collector.update("hidden_states_before_head", x)
