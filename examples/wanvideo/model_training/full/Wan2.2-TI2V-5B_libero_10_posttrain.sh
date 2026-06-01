@@ -1,4 +1,5 @@
-export WAN_ACTION_DIM=7
+export WAN_ACTION_DIM=14
+export WAN_CONDITION_FRAMES=9
 export WAN_DEBUG=False
 
 PYTHONPATH=/mnt/project_rlinf/jzn/workspace/release/DiffSynth-Studio/:$PYTHONPATH
@@ -6,6 +7,7 @@ PYTHONPATH=/mnt/project_rlinf/jzn/workspace/release/DiffSynth-Studio/:$PYTHONPAT
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch \
   --config_file /mnt/project_rlinf/jzn/workspace/release/DiffSynth-Studio/examples/wanvideo/model_training/full/accelerate_config.yaml \
   /mnt/project_rlinf/jzn/workspace/release/DiffSynth-Studio/examples/wanvideo/model_training/train_rlinf.py \
+  --num_frames 57 \
   --dataset_repeat 1 \
   --model_paths '[
     "/mnt/project_rlinf/jzn/workspace/release/DiffSynth-Studio/runs/full_libero_10/epoch-299.safetensors",
@@ -21,6 +23,10 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch \
   --val_interval 100 \
   --save_epochs 100 \
   --dataset RLinfDataset \
+  --action_dim 14 \
+  --condition_frames 9 \
+  --Ta 48 \
+  --To 8 \
   --train_dataset_base_path '[
     "/mnt/project_rlinf/jzn/dataset/simulation/dataset_for_posttrain_worldmodel_libero_10/base_policy_rollout/train_data",
     "/mnt/project_rlinf/jzn/dataset/simulation/dataset_for_posttrain_worldmodel_libero_10/base_policy_rollout_added/train_data",

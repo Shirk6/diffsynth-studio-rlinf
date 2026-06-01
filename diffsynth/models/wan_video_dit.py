@@ -385,8 +385,8 @@ class WanModel(torch.nn.Module):
         # five_frame_condition: Optional[bool] = None,  # deprecated
         # one_frame_condition: Optional[bool] = None,   # deprecated
         action_mode: str = "both",
-        length_conditonal_frames: int = 5,
-        action_dim: int = 7,
+        length_conditonal_frames: int = 9,
+        action_dim: int = 14,
     ):
         super().__init__()
         self.dim = dim
@@ -415,21 +415,14 @@ class WanModel(torch.nn.Module):
         self.enable_action_crossattn = self.action_mode in {"crossattn", "both"}
         self.enable_action_modulation = self.action_mode in {"modulation", "both"}
 
-        # if length_conditonal_frames is None:
-        #     # Backward compatibility for deprecated frame flags.
-        #     if one_frame_condition:
-        #         length_conditonal_frames = 1
-        #     elif five_frame_condition:
-        #         length_conditonal_frames = 5
-        #     else:
-        #         length_conditonal_frames = 5
-        if length_conditonal_frames not in {1, 5}:
+        if length_conditonal_frames < 1 or length_conditonal_frames % 4 != 1:
             raise ValueError(
-                f"Unsupported length_conditonal_frames: {length_conditonal_frames}, expected 1 or 5."
+                f"Unsupported length_conditonal_frames: {length_conditonal_frames}, expected 4n+1."
             )
         self.length_conditonal_frames = length_conditonal_frames
+        self.condition_latent_frames = (self.length_conditonal_frames - 1) // 4 + 1
         self.one_frame_condition = self.length_conditonal_frames == 1
-        self.five_frame_condition = self.length_conditonal_frames == 5
+        self.five_frame_condition = self.length_conditonal_frames > 1
       
         print(f"The MODE of action control is {self.action_mode}")
         print(f'The MODE of length conditional frames is {self.length_conditonal_frames}')
@@ -665,7 +658,8 @@ class WanModelStateDictConverter:
         return state_dict_, config
     
     def from_civitai(self, state_dict):
-        action_dim_override = int(os.environ.get("WAN_ACTION_DIM", "7"))
+        action_dim_override = int(os.environ.get("WAN_ACTION_DIM", "14"))
+        condition_frame_override = int(os.environ.get("WAN_CONDITION_FRAMES", "9"))
         state_dict = {name: param for name, param in state_dict.items() if not name.startswith("vace")}
         state_dict = {name: param for name, param in state_dict.items() if name.split(".")[0] not in ["pose_patch_embedding", "face_adapter", "face_encoder", "motion_encoder"]}
         state_dict_ = {}
@@ -721,7 +715,7 @@ class WanModelStateDictConverter:
                 "require_vae_embedding": False,
                 "fuse_vae_embedding_in_latents": True,
                 "action_mode": "both",
-                "length_conditonal_frames": 5,
+                "length_conditonal_frames": condition_frame_override,
                 "action_dim": action_dim_override,
             }
         elif hash_state_dict_keys(state_dict) == "fcc43a93949201bafeb34aa1eb8bc50f":
@@ -743,8 +737,8 @@ class WanModelStateDictConverter:
                 "require_vae_embedding": False,
                 "fuse_vae_embedding_in_latents": True,
                 "action_mode": "both",
-                "length_conditonal_frames": 5,
-                "action_dim": 10,
+                "length_conditonal_frames": condition_frame_override,
+                "action_dim": action_dim_override,
             }
         elif hash_state_dict_keys(state_dict) == "bc4824aef7c3f23d3378cec6e2b1316c":
             # LIBERO 7 action_dim , default
@@ -765,7 +759,7 @@ class WanModelStateDictConverter:
                 "require_vae_embedding": False,
                 "fuse_vae_embedding_in_latents": True,
                 "action_mode": "both",
-                "length_conditonal_frames": 5,
+                "length_conditonal_frames": condition_frame_override,
                 "action_dim": action_dim_override,
             }
         elif hash_state_dict_keys(state_dict) == "0c81d47223c50d8d74106f79310ae207":
@@ -787,7 +781,7 @@ class WanModelStateDictConverter:
                 "require_vae_embedding": False,
                 "fuse_vae_embedding_in_latents": True,
                 "action_mode": "both",
-                "length_conditonal_frames": 5,
+                "length_conditonal_frames": condition_frame_override,
                 "action_dim": action_dim_override,
             }
         elif hash_state_dict_keys(state_dict) == "3f4e37438f72ef88cd27b161fd1b193c":
@@ -809,7 +803,7 @@ class WanModelStateDictConverter:
                 "require_vae_embedding": False,
                 "fuse_vae_embedding_in_latents": True,
                 "action_mode": "crossattn",
-                "length_conditonal_frames": 5,
+                "length_conditonal_frames": condition_frame_override,
                 "action_dim": action_dim_override,
             }
         elif hash_state_dict_keys(state_dict) == "6efc7e19e87c1755f17dec14be3d0bf1":
@@ -831,7 +825,7 @@ class WanModelStateDictConverter:
                 "require_vae_embedding": False,
                 "fuse_vae_embedding_in_latents": True,
                 "action_mode": "modulation",
-                "length_conditonal_frames": 5,
+                "length_conditonal_frames": condition_frame_override,
                 "TEMP9": False,
                 "TEMP13": True,
                 "action_dim": action_dim_override,
@@ -855,7 +849,7 @@ class WanModelStateDictConverter:
                 "require_vae_embedding": False,
                 "fuse_vae_embedding_in_latents": True,
                 "action_mode": "modulation",
-                "length_conditonal_frames": 5,
+                "length_conditonal_frames": condition_frame_override,
                 "action_dim": action_dim_override,
             }
         elif hash_state_dict_keys(state_dict) == "5b013604280dd715f8457c6ed6d6a626":

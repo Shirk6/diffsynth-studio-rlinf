@@ -29,7 +29,7 @@ class WanTrainingModule(DiffusionTrainingModule):
         max_timestep_boundary=1.0,
         min_timestep_boundary=0.0,
         static_video_prob=0.0, # 新增参数
-        action_dim=7,
+        action_dim=14,
     ):
         super().__init__()
         # Load models
@@ -120,12 +120,14 @@ if __name__ == "__main__":
     parser = wan_parser()
     parser.add_argument("--static_video_prob", type=float, default=0.15, help="Probability of replacing the sample with a static video (action=0)")
     parser.add_argument("--val_interval", type=int, default=5, help="Validation interval in epochs")
-    parser.add_argument("--dataset",type=str,default="RLinfNpyDataset",help="Dataset type for training")
-    parser.add_argument("--action_dim", type=int, default=7, help="Action dimension for dataset and hash-based WanModel config override.")
+    parser.add_argument("--dataset",type=str,default="RLinfDataset",help="Dataset type for training")
+    parser.add_argument("--action_dim", type=int, default=14, help="Action dimension for dataset and hash-based WanModel config override.")
+    parser.add_argument("--condition_frames", type=int, default=9, help="Number of conditioning frames. Must be 4n+1.")
     parser.add_argument("--val_dataset_base_path", type=str, default="[]", help="Validation dataset base paths in JSON list format.")
     parser.add_argument("--train_dataset_base_path", type=str, default="[]", help="Training dataset base paths in JSON list format.")
-    parser.add_argument("--Ta", type=int, default=8, help="Action prediction window length")
-    parser.add_argument("--To", type=int, default=4, help="Observation context window length")
+    parser.add_argument("--Ta", type=int, default=48, help="Action prediction window length")
+    parser.add_argument("--To", type=int, default=8, help="Observation context window length")
+    parser.add_argument("--max_finish_step", type=int, default=0, help="Maximum usable end step per trajectory. 0 means no cap.")
     parser.add_argument("--action2obs_bias", type=bool, default=False, help="Whether to use action2obs bias")
     parser.add_argument("--retain_actions", type=bool, default=False, help="Whether to retain actions")
     args = parser.parse_args()
@@ -152,28 +154,45 @@ if __name__ == "__main__":
     args.train_dataset_base_path = _parse_path_list(args.train_dataset_base_path, "--train_dataset_base_path")
     args.val_dataset_base_path = _parse_path_list(args.val_dataset_base_path, "--val_dataset_base_path")
     os.environ["WAN_ACTION_DIM"] = str(args.action_dim)
+    os.environ["WAN_CONDITION_FRAMES"] = str(args.condition_frames)
 
     if args.dataset == "RLinfDataset":
         dataset = RLinfDataset(
             base_path=args.train_dataset_base_path,
             repeat=args.dataset_repeat,
+            Ta=args.Ta,
+            To=args.To,
             action_dim=args.action_dim,
+            retain_actions=args.retain_actions,
+            action2obs_bias=args.action2obs_bias,
+            max_finish_step=args.max_finish_step,
         )
         val_dataset = RLinfDataset(
             base_path=args.val_dataset_base_path,
             repeat=1,
+            Ta=args.Ta,
+            To=args.To,
             action_dim=args.action_dim,
+            retain_actions=args.retain_actions,
+            action2obs_bias=args.action2obs_bias,
+            max_finish_step=args.max_finish_step,
         )
     elif args.dataset == "SimpleVLARealWorldRLinfDataset":
         dataset = SimpleVLARealWorldRLinfDataset(
             base_path=args.train_dataset_base_path,
             repeat=args.dataset_repeat,
-            action_dim=args.action_dim,
+            Ta=args.Ta,
+            To=args.To,
+            retain_actions=args.retain_actions,
+            action2obs_bias=args.action2obs_bias,
         )
         val_dataset = SimpleVLARealWorldRLinfDataset(
             base_path=args.val_dataset_base_path,
             repeat=1,
-            action_dim=args.action_dim,
+            Ta=args.Ta,
+            To=args.To,
+            retain_actions=args.retain_actions,
+            action2obs_bias=args.action2obs_bias,
         )
     else:
         raise NotImplementedError('this dataset type not implemented')

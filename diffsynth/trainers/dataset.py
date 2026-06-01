@@ -48,7 +48,7 @@ class RLinfDataset(torch.utils.data.Dataset):
         retain_actions: bool = True,
         stride: int = 1,
         action_dim: int = 7,
-        max_finish_step: int = 440,
+        max_finish_step: int = 0,
         repeat: int = 1,
         action2obs_bias: bool = False,
     ):
@@ -108,7 +108,7 @@ class RLinfDataset(torch.utils.data.Dataset):
             video_shape = np.load(os.path.join(data_path, "rgb.npy"), mmap_mode='r').shape
             T, N = video_shape[0], video_shape[1]  # (T, N, C, H, W)
 
-            if T > self.max_finish_step:
+            if self.max_finish_step > 0 and T > self.max_finish_step:
                 finish_step = self.max_finish_step
             else:
                 finish_step = T - 1

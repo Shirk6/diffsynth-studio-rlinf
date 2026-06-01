@@ -3,6 +3,7 @@ try:
     torch.serialization.add_safe_globals(['set', 'OrderedDict', 'builtins.set'])
 except AttributeError:
     pass
+import os
 import time
 from PIL import Image, ImageDraw
 from diffsynth import save_video
@@ -11,6 +12,8 @@ import numpy as np
 import gc
 
 
+os.environ["WAN_ACTION_DIM"] = "14"
+os.environ["WAN_CONDITION_FRAMES"] = "9"
 
 
 model_ckpt_path = "/mnt/project_rlinf/jzn/workspace/DiffSynth-Studio_zsq/outputs/0201-object/epoch-2199.safetensors"
@@ -24,7 +27,9 @@ inference_configs = [
 ]
 
 
-window = 9
+condition_frames = 9
+predict_frames = 48
+window = condition_frames + predict_frames
 total_frames = 505
 
 
@@ -82,7 +87,7 @@ def get_pipeline(lora_path):
 
 all_results = []
 
-num_iters = (total_frames - 1) // (window - 1)
+num_iters = max(1, (total_frames - 1 + predict_frames - 1) // predict_frames)
 print("Total rolling chunks:", num_iters)
 
 for lora_path, lora_name in lora_rows:
@@ -95,23 +100,24 @@ for lora_path, lora_name in lora_rows:
         generated_frames = []
 
         input_image = gt_video_full[0]
-        input_image4 = [input_image] * 4
+        input_image4 = [input_image] * (condition_frames - 1)
 
         for i in range(num_iters):
             print(f"  Chunk {i+1}/{num_iters}")
 
-            start = i * (window - 1)                   
-            end = start + window 
+            start = i * predict_frames
+            end = start + predict_frames
             if start == 0:
-
-                idx = [0] * 5 + list(range(1, window))
+                idx = [0] * condition_frames + list(range(1, predict_frames + 1))
             else:
-                idx = [0] + list(range(start - 3, end))
+                idx = [0] + list(range(start - (condition_frames - 2), end + 1))
             idx = np.array(idx)
-            print(f"context_idx:{idx[:5]}, predict_idx:{idx[5:]}")
+            print(f"context_idx:{idx[:condition_frames]}, predict_idx:{idx[condition_frames:]}")
             action_full[0] = 0
             action_full[0, -1] = -1
-            action = action_full[idx]
+            clamped_idx = np.clip(idx, 0, len(action_full) - 1)
+            idx_tensor = torch.as_tensor(clamped_idx, dtype=torch.long, device=action_full.device)
+            action = action_full.index_select(0, idx_tensor)
             if isinstance(action, torch.Tensor):
                 action = action.to(dtype=torch.bfloat16, device="cuda:0")
 
@@ -124,7 +130,7 @@ for lora_path, lora_name in lora_rows:
                 "input_image4": input_image4,
                 "action": action,
                 "height": 256, "width": 256,
-                "num_frames": window + 4,
+                "num_frames": window,
                 "num_inference_steps": steps,
                 "cfg_scale": cfg_scale,
                 "sigma_shift": shift,
@@ -137,14 +143,14 @@ for lora_path, lora_name in lora_rows:
 
             if i == 0:
                 generated_frames.extend(
-                    [out_video[0]] + out_video[-8:]
+                    [out_video[0]] + out_video[-predict_frames:]
                 )
             else:
-                generated_frames.extend(out_video[5:])
+                generated_frames.extend(out_video[-predict_frames:])
             
             if i == num_iters - 1:
                 final_ref_frame = out_video[0]
-            input_image4 = out_video[-4:]
+            input_image4 = generated_frames[-(condition_frames - 1):]
 
 
         end_time = time.time()
@@ -213,4 +219,3 @@ for t in range(total_frames):
 
 save_video(concat_frames, "concat_rows_5B.mp4", fps=30, quality=5)
 print("\n===> Done! Saved concat_lora_rows_5B.mp4")
-

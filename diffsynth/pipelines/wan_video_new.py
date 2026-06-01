@@ -135,18 +135,18 @@ class WanVideoPipeline(BasePipeline):
             inputs["latents"][:, :, 0:1] = first_frame_noisy
         # ==============================================================
         if self.dit.has_action_mode and self.dit.five_frame_condition:
+            condition_latent_frames = self.dit.condition_latent_frames
             inputs["latents"][:, :, 0:1] = inputs["input_latents"][:, :, 0:1]
             
 
             rand_idx = torch.tensor([max(0, len(self.scheduler.timesteps) - 50)])
             small_timestep = self.scheduler.timesteps[rand_idx].to(dtype=self.torch_dtype, device=self.device)
 
-            
-            context_frames_input = inputs["input_latents"][:, :, 1:2]
-            context_frames_noise = inputs["noise"][:, :, 1:2]
-            
-            context_frames_noisy = self.scheduler.add_noise(context_frames_input, context_frames_noise, small_timestep)
-            inputs["latents"][:, :, 1:2] = context_frames_noisy
+            if condition_latent_frames > 1:
+                context_frames_input = inputs["input_latents"][:, :, 1:condition_latent_frames]
+                context_frames_noise = inputs["noise"][:, :, 1:condition_latent_frames]
+                context_frames_noisy = self.scheduler.add_noise(context_frames_input, context_frames_noise, small_timestep)
+                inputs["latents"][:, :, 1:condition_latent_frames] = context_frames_noisy
 
         training_target = self.scheduler.training_target(inputs["input_latents"], inputs["noise"], timestep)
         for name, t in [
@@ -163,7 +163,8 @@ class WanVideoPipeline(BasePipeline):
             loss = torch.nn.functional.mse_loss(noise_pred.float(), training_target.float(), reduction='none')
             
             mask = torch.zeros_like(loss)
-            mask[:, :, -2:] = 1.0
+            condition_latent_frames = self.dit.condition_latent_frames
+            mask[:, :, condition_latent_frames:] = 1.0
             
             loss = (loss * mask).sum() / mask.sum()
         else:
@@ -847,19 +848,19 @@ class WanVideoUnit_ImageEmbedderFused(PipelineUnit):
             latents[:, :, 0: 1] = z
         else:
             # input_image:      List[PIL]        length = B
-            # input_image4:     List[List[PIL]]  shape = B x 4
+            # input_image4:     List[List[PIL]]  shape = B x (condition_frames - 1)
 
             if isinstance(input_image, list):
-                input_image5 = [
+                input_condition_images = [
                     [img] + img4
                     for img, img4 in zip(input_image, input_image4)
                 ]
             else:
-                input_image5 = [input_image] + input_image4
-                input_image5 = [input_image5]
-            input_video5 = pipe.preprocess_video(input_image5)
-            z = pipe.vae.encode(input_video5, device=pipe.device, tiled=tiled, tile_size=tile_size, tile_stride=tile_stride).to(dtype=pipe.torch_dtype, device=pipe.device)
-            latents[:, :, 0: 2] = z
+                input_condition_images = [input_image] + input_image4
+                input_condition_images = [input_condition_images]
+            input_condition_video = pipe.preprocess_video(input_condition_images)
+            z = pipe.vae.encode(input_condition_video, device=pipe.device, tiled=tiled, tile_size=tile_size, tile_stride=tile_stride).to(dtype=pipe.torch_dtype, device=pipe.device)
+            latents[:, :, 0:z.shape[2]] = z
         return {"latents": latents, "fuse_vae_embedding_in_latents": True, "first_frame_latents": z}
 
 
@@ -1667,6 +1668,7 @@ def model_fn_wan_video(
     if dit.seperated_timestep and fuse_vae_embedding_in_latents and dit.one_frame_condition:
         raise NotImplementedError("one_frame_condition is not supported")
     elif dit.seperated_timestep and fuse_vae_embedding_in_latents and dit.five_frame_condition:
+        condition_latent_frames = dit.condition_latent_frames
         # action_mlp2 outputs one token per 4-frame group.
         # To align action tokens with timestep tokens, each temporal token needs to be
         # expanded across all spatial patch positions per frame:
@@ -1680,8 +1682,8 @@ def model_fn_wan_video(
 
         if not bs_1:
             timestep = torch.concat([
-                torch.zeros((2, latents.shape[3] * latents.shape[4] // 4), dtype=latents.dtype, device=latents.device),
-                torch.ones((latents.shape[2] - 2, latents.shape[3] * latents.shape[4] // 4), dtype=latents.dtype, device=latents.device) * timestep
+                torch.zeros((condition_latent_frames, spatial_expand), dtype=latents.dtype, device=latents.device),
+                torch.ones((latents.shape[2] - condition_latent_frames, spatial_expand), dtype=latents.dtype, device=latents.device) * timestep
             ]).flatten()
             t = dit.time_embedding(sinusoidal_embedding_1d(dit.freq_dim, timestep).unsqueeze(0)).repeat(B, 1, 1)
             if dit.enable_action_modulation:
@@ -1690,8 +1692,8 @@ def model_fn_wan_video(
             t_mod = dit.time_projection(t).unflatten(2, (6, dit.dim))
         elif bs_1:
             timestep = torch.concat([
-                torch.zeros((2, latents.shape[3] * latents.shape[4] // 4), dtype=latents.dtype, device=latents.device),
-                torch.ones((latents.shape[2] - 2, latents.shape[3] * latents.shape[4] // 4), dtype=latents.dtype, device=latents.device) * timestep
+                torch.zeros((condition_latent_frames, spatial_expand), dtype=latents.dtype, device=latents.device),
+                torch.ones((latents.shape[2] - condition_latent_frames, spatial_expand), dtype=latents.dtype, device=latents.device) * timestep
             ]).flatten()
             t = dit.time_embedding(sinusoidal_embedding_1d(dit.freq_dim, timestep).unsqueeze(0))
 

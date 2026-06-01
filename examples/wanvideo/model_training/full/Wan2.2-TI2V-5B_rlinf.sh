@@ -3,7 +3,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch \
   examples/wanvideo/model_training/train_rlinf.py \
   --height 256 \
   --width 256 \
-  --num_frames 13 \
+  --num_frames 57 \
   --dataset_repeat 1 \
   --model_paths '[
     ["/mnt/project_rlinf/jzn/workspace/DiffSynth-Studio/ckpt/diffusion_pytorch_model-00001-of-00003.safetensors",
@@ -20,5 +20,14 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch \
   --extra_inputs "input_image,action" \
   --val_interval 50 \
   --save_epochs 50 \
-  --dataset RLinfNpyDataset \
-  --dataset_base_path /mnt/project_rlinf/jzn/workspace/latest/RLinf/dataset_for_posttrain_worldmodel_libero_spatial/base_policy_rollout
+  --dataset RLinfDataset \
+  --action_dim 14 \
+  --condition_frames 9 \
+  --Ta 48 \
+  --To 8 \
+  --train_dataset_base_path '[
+    "/mnt/project_rlinf/jzn/workspace/latest/RLinf/dataset_for_posttrain_worldmodel_libero_spatial/base_policy_rollout"
+  ]' \
+  --val_dataset_base_path '[
+    "/mnt/project_rlinf/jzn/workspace/latest/RLinf/dataset_for_posttrain_worldmodel_libero_spatial/base_policy_rollout"
+  ]'

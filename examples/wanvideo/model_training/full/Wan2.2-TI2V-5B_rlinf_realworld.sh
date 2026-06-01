@@ -1,7 +1,7 @@
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch \
   --config_file examples/wanvideo/model_training/full/accelerate_config.yaml \
   examples/wanvideo/model_training/train_rlinf.py \
-  --num_frames 13 \
+  --num_frames 57 \
   --dataset_repeat 1 \
   --model_paths '[
     ["/mnt/project_rlinf/jzn/workspace/DiffSynth-Studio/ckpt/diffusion_pytorch_model-00001-of-00003.safetensors",
@@ -20,6 +20,9 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch \
   --val_interval 100 \
   --save_epochs 100 \
   --dataset SimpleVLARealWorldRLinfDataset \
+  --condition_frames 9 \
+  --Ta 48 \
+  --To 8 \
   --train_dataset_base_path '[
     "/mnt/project_rlinf/jzn/dataset/franka_3tasks/pull_drawer/base_policy_rollout",
     "/mnt/project_rlinf/jzn/dataset/franka_3tasks/pick_bread/base_policy_rollout",
@@ -30,4 +33,4 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch \
     "/mnt/project_rlinf/jzn/dataset/franka_3tasks/pick_bread/val_base_policy_rollout",
     "/mnt/project_rlinf/jzn/dataset/franka_3tasks/pick_banana/val_base_policy_rollout"
   ]' \
-  --action_dim 7
+  --action_dim 14

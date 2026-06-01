@@ -1,8 +1,11 @@
 import os
+os.environ["WAN_ACTION_DIM"] = "14"
+os.environ["WAN_CONDITION_FRAMES"] = "9"
+
 import torch
 import numpy as np
 from PIL import Image
-from diffsynth.pipelines.wan_video_new_bs1 import WanVideoPipeline, ModelConfig
+from diffsynth.pipelines.wan_video_new import WanVideoPipeline, ModelConfig
 from diffsynth import save_video
 from tqdm import tqdm
 import multiprocessing
@@ -47,8 +50,12 @@ pipe.vae.to(args_cli.device)
 # 2. Helpers
 # =========================================================
 def load_gt_npy_folder(folder):
-    rgb = np.load(os.path.join(folder, "rgb.npy"))   # [T,3,H,W]
-    ak = np.load(os.path.join(folder, "actions.npy"))  # [T,action_dim]
+    rgb = np.load(os.path.join(folder, "rgb.npy"))
+    ak = np.load(os.path.join(folder, "actions.npy"))
+    if rgb.ndim == 5:
+        rgb = rgb[:, 0]  # [T, N, 3, H, W] -> [T, 3, H, W]
+    if ak.ndim == 3:
+        ak = ak[:, 0]  # [T, N, action_dim] -> [T, action_dim]
 
     video = []
     for frame in rgb:
@@ -71,32 +78,29 @@ def save_frames(frames, save_path):
 # =========================================================
 # 3. 自回归生成（严格输出 action_len 帧）
 # =========================================================
-def generate_sequence(rgb_list, actions, window=9, steps=5):
+def generate_sequence(rgb_list, actions, condition_frames=9, predict_frames=48, steps=5):
     action_len = len(actions)
-    action_window = 8
+    window = condition_frames + predict_frames
     print(f"动作帧数 = {action_len}")
 
     # chunk 数：覆盖 action_len
-    num_iters = action_len  // (window - 1)
-    if num_iters < 1:
-        num_iters = 1
+    num_iters = max(1, (action_len - 1 + predict_frames - 1) // predict_frames)
 
     print(f"Rolling chunks = {num_iters}")
 
     generated_frames = []
     input_image = rgb_list[0]
-    input_image4 = [input_image] * 4
+    input_image4 = [input_image] * (condition_frames - 1)
 
     for i in range(num_iters):
         print(f'\n--- Chunk {i+1}/{num_iters} ---')
-        start = i * (window - 1) # 0, 8, 16, 
-        end = start + window # 9, 17, 25, 
+        start = i * predict_frames
+        end = start + predict_frames
 
         if i == 0:
-            # 序号就是0,0,0,0,0,  1,2,3,4,5,6,7,8
-            idx = [0] * 5 + list(range(1, window))
+            idx = [0] * condition_frames + list(range(1, predict_frames + 1))
         else:
-            idx = [0] + list(range(start - 3, end))
+            idx = [0] + list(range(start - (condition_frames - 2), end + 1))
         idx = np.array(idx)
 
         # 使用 idx 提取动作，处理越界情况（使用最后一帧动作填充）
@@ -114,23 +118,23 @@ def generate_sequence(rgb_list, actions, window=9, steps=5):
             action=act_win,
             height=256,
             width=256,
-            num_frames=window + 4,
+            num_frames=window,
             num_inference_steps=steps,
             cfg_scale=1.0,
             idx=idx,
+            bs_1=True,
         )
 
         gen_video = out_video[0]
 
         # 第一个 chunk：加入全 window
         if len(generated_frames) == 0:
-            generated_frames.extend([gen_video[0]] + gen_video[-8:])
+            generated_frames.extend([gen_video[0]] + gen_video[-predict_frames:])
         else:
-            # 后续 chunk：去掉第一帧（避免重复）
-            generated_frames.extend(gen_video[5:])
+            generated_frames.extend(gen_video[-predict_frames:])
 
         # 下一个 chunk 的 context
-        input_image4 = gen_video[-4:]
+        input_image4 = generated_frames[-(condition_frames - 1):]
 
     # 输出严格等于动作长度
     generated_frames = generated_frames[:action_len]
@@ -142,7 +146,7 @@ def generate_sequence(rgb_list, actions, window=9, steps=5):
 # =========================================================
 # 4. 处理单条序列
 # =========================================================
-def process_one_sequence(gt_root, step, seed, traj, out_root, window=9, steps=5):
+def process_one_sequence(gt_root, step, seed, traj, out_root, steps=5):
 
     folder = os.path.join(gt_root, f"step_{step}_seed_{seed}_traj_{traj}")
     print(f"\n=== 处理 {folder} ===")
@@ -150,7 +154,7 @@ def process_one_sequence(gt_root, step, seed, traj, out_root, window=9, steps=5)
     rgb_list, actions = load_gt_npy_folder(folder)
 
     # 生成
-    gen_frames = generate_sequence(rgb_list, actions, window=window, steps=steps)
+    gen_frames = generate_sequence(rgb_list, actions, steps=steps)
 
     # 输出目录：https://规范结构
     out_dir = os.path.join(out_root, f"step_{step}_seed_{seed}_traj_{traj}")
