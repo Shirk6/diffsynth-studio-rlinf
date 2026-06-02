@@ -1,6 +1,6 @@
 import torch, os, json, ast
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 from diffsynth import load_state_dict
 from diffsynth.pipelines.wan_video_new import WanVideoPipeline, ModelConfig
 from diffsynth.trainers.utils import DiffusionTrainingModule, ModelLogger, launch_training_task, wan_parser

@@ -718,6 +718,28 @@ class WanModelStateDictConverter:
                 "length_conditonal_frames": condition_frame_override,
                 "action_dim": action_dim_override,
             }
+        elif hash_state_dict_keys(state_dict) == "c435810b89179880969e31c28235a02d":
+            # Wan-AI/Wan2.2-TI2V-5B-action-challenge
+            config = {
+                "has_image_input": False,
+                "patch_size": [1, 2, 2],
+                "in_dim": 48,
+                "dim": 3072,
+                "ffn_dim": 14336,
+                "freq_dim": 256,
+                "text_dim": 4096,
+                "out_dim": 48,
+                "num_heads": 24,
+                "num_layers": 30,
+                "eps": 1e-6,
+                "seperated_timestep": True,
+                "require_clip_embedding": False,
+                "require_vae_embedding": False,
+                "fuse_vae_embedding_in_latents": True,
+                "action_mode": "both",
+                "length_conditonal_frames": condition_frame_override,
+                "action_dim": action_dim_override,
+            }
         elif hash_state_dict_keys(state_dict) == "fcc43a93949201bafeb34aa1eb8bc50f":
             # AGX 10 action_dim , default
             config = {
