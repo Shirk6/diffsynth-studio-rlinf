@@ -36,6 +36,64 @@ def debug_state_dict_mismatch(model, model_state_dict):
 
     print("\n===== END DEBUG =====\n")
 
+def _summarize_module_parameters(module, module_name):
+    for name, param in module.named_parameters():
+        data = param.detach().float()
+        finite = torch.isfinite(data)
+        finite_count = int(finite.sum().item())
+        total_count = data.numel()
+        if finite_count == 0:
+            print(f"    {module_name}.{name}: shape={tuple(param.shape)} finite=0/{total_count}")
+            continue
+        finite_data = data[finite]
+        print(
+            f"    {module_name}.{name}: shape={tuple(param.shape)} "
+            f"finite={finite_count}/{total_count} "
+            f"mean={finite_data.mean().item():.6g} "
+            f"std={finite_data.std(unbiased=False).item():.6g} "
+            f"min={finite_data.min().item():.6g} "
+            f"max={finite_data.max().item():.6g}"
+        )
+
+def _init_linear_module(module):
+    for layer in module:
+        if isinstance(layer, torch.nn.Linear):
+            torch.nn.init.xavier_uniform_(layer.weight)
+            if layer.bias is not None:
+                torch.nn.init.zeros_(layer.bias)
+
+def _linear_module_has_nan_or_inf(module):
+    for layer in module:
+        if isinstance(layer, torch.nn.Linear):
+            if torch.isnan(layer.weight).any() or torch.isinf(layer.weight).any():
+                return True
+            if layer.bias is not None and (torch.isnan(layer.bias).any() or torch.isinf(layer.bias).any()):
+                return True
+    return False
+
+def _check_or_initialize_action_mlp(model, model_state_dict, load_result, module_name):
+    if not hasattr(model, module_name):
+        return
+
+    module = getattr(model, module_name)
+    expected_keys = [f"{module_name}.{name}" for name, _ in module.named_parameters()]
+    missing_keys = set(load_result.missing_keys)
+    missing_action_keys = [key for key in expected_keys if key in missing_keys or key not in model_state_dict]
+
+    print(f"    Checking {module_name} weights...")
+    if missing_action_keys:
+        print(f"    {module_name} is missing from checkpoint, initializing with Xavier uniform:")
+        for key in missing_action_keys:
+            print(f"      missing {key}")
+        _init_linear_module(module)
+    elif _linear_module_has_nan_or_inf(module):
+        print(f"    {module_name} contains NaN/Inf, reinitializing with Xavier uniform.")
+        _init_linear_module(module)
+    else:
+        print(f"    {module_name} was loaded from checkpoint and is finite.")
+
+    _summarize_module_parameters(module, module_name)
+
 def load_model_from_single_file(state_dict, model_names, model_classes, model_resource, torch_dtype, device):
     loaded_model_names, loaded_models = [], []
     for model_name, model_class in zip(model_names, model_classes):
@@ -63,54 +121,19 @@ def load_model_from_single_file(state_dict, model_names, model_classes, model_re
         # model.load_state_dict(model_state_dict, assign=True)
         model = model.to_empty(device=device)
         # debug_state_dict_mismatch(model, model_state_dict)
-        model.load_state_dict(model_state_dict, strict=False, assign=True)
-        # if model has action_mlp1，then initialize it, should only be used in training
-        if hasattr(model, "action_mlp1"):
-            print("    Checking action_mlp1 weights for NaN/Inf...")
-            need_init1 = False
-            for m in model.action_mlp1:
-                if isinstance(m, torch.nn.Linear):
-                    if torch.isnan(m.weight).any() or torch.isinf(m.weight).any():
-                        need_init1 = True
-                        break
-                    if m.bias is not None and (torch.isnan(m.bias).any() or torch.isinf(m.bias).any()):
-                        need_init1 = True
-                        break
-
-            if need_init1:
-                print("    action_mlp1 contains NaN/Inf, reinitializing weights...")
-                for m in model.action_mlp1:
-                    if isinstance(m, torch.nn.Linear):
-                        # torch.nn.init.normal_(m.weight, 0, 0.01)
-                        torch.nn.init.xavier_uniform_(m.weight)
-                        if m.bias is not None:
-                            torch.nn.init.zeros_(m.bias)
-            else:
-                print("    action_mlp1 weights are fine, keeping original values.")
-
-        # if model has action_mlp2，then initialize it, should only be used in training
-        if hasattr(model, "action_mlp2"):
-            print("    Checking action_mlp2 weights for NaN/Inf...")
-            need_init2 = False
-            for m in model.action_mlp2:
-                if isinstance(m, torch.nn.Linear):
-                    if torch.isnan(m.weight).any() or torch.isinf(m.weight).any():
-                        need_init2 = True
-                        break
-                    if m.bias is not None and (torch.isnan(m.bias).any() or torch.isinf(m.bias).any()):
-                        need_init2 = True
-                        break
-
-            if need_init2:
-                print("    action_mlp2 contains NaN/Inf, reinitializing weights...")
-                for m in model.action_mlp2:
-                    if isinstance(m, torch.nn.Linear):
-                        # torch.nn.init.normal_(m.weight, 0, 0.01)
-                        torch.nn.init.xavier_uniform_(m.weight)
-                        if m.bias is not None:
-                            torch.nn.init.zeros_(m.bias)
-            else:
-                print("    action_mlp2 weights are fine, keeping original values.")
+        load_result = model.load_state_dict(model_state_dict, strict=False, assign=True)
+        action_missing_keys = [key for key in load_result.missing_keys if key.startswith("action_mlp")]
+        action_unexpected_keys = [key for key in load_result.unexpected_keys if key.startswith("action_mlp")]
+        if action_missing_keys:
+            print("    Missing action MLP keys in checkpoint:")
+            for key in action_missing_keys:
+                print(f"      {key}")
+        if action_unexpected_keys:
+            print("    Unexpected action MLP keys in checkpoint:")
+            for key in action_unexpected_keys:
+                print(f"      {key}")
+        _check_or_initialize_action_mlp(model, model_state_dict, load_result, "action_mlp1")
+        _check_or_initialize_action_mlp(model, model_state_dict, load_result, "action_mlp2")
 
 
         model = model.to(dtype=torch_dtype) 
@@ -516,4 +539,3 @@ class ModelManager:
     def to(self, device):
         for model in self.model:
             model.to(device)
-
