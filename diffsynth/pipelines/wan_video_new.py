@@ -173,7 +173,7 @@ class WanVideoPipeline(BasePipeline):
         self.prompter = WanPrompter(tokenizer_path=tokenizer_path)
         self.text_encoder: WanTextEncoder = None
         self.image_encoder: WanImageEncoder = None
-        # self.action_embedder = ActionEmbedder(action_dim=8, embed_dim=1536)
+        # self.action_embedder = ActionEmbedder(action_dim=14, embed_dim=1536)
         self.dit: WanModel = None
         self.dit2: WanModel = None
         self.vae: WanVideoVAE = None
@@ -1800,6 +1800,8 @@ def model_fn_wan_video(
             assert torch.isfinite(action).all(), f"action input has NaN/Inf. Shape: {action.shape}, min: {action.min()}, max: {action.max()}"
             action_emb = dit.action_mlp2(action)
 
+    tokens_per_frame = latents.shape[3] * latents.shape[4] // 4
+
     if dit.seperated_timestep and fuse_vae_embedding_in_latents and dit.one_frame_condition:
         raise NotImplementedError("已弃用，请迁移至[five_frame_condition]")
         timestep = torch.concat([
@@ -1810,7 +1812,7 @@ def model_fn_wan_video(
 
         if dit.TI2V2 or dit.TI2V3:
             action_emb = action_emb.unsqueeze(0) # [1, T, 3072]
-            action_emb = action_emb.unsqueeze(2).repeat(1,1,64,1).flatten(1,2)
+            action_emb = action_emb.unsqueeze(2).repeat(1,1,tokens_per_frame,1).flatten(1,2)
             t = t + action_emb
 
         if use_unified_sequence_parallel and dist.is_initialized() and dist.get_world_size() > 1:
@@ -1827,7 +1829,7 @@ def model_fn_wan_video(
             ]).flatten()
             t = dit.time_embedding(sinusoidal_embedding_1d(dit.freq_dim, timestep).unsqueeze(0)).repeat(B, 1, 1)
             if dit.TI2V2 or dit.TI2V3:
-                action_emb = action_emb.unsqueeze(2).repeat(1,1,64,1).flatten(1,2)
+                action_emb = action_emb.unsqueeze(2).repeat(1,1,tokens_per_frame,1).flatten(1,2)
                 t = t + action_emb
             t_mod = dit.time_projection(t).unflatten(2, (6, dit.dim))
         elif bs_1:
@@ -1839,7 +1841,7 @@ def model_fn_wan_video(
 
             if dit.TI2V2 or dit.TI2V3:
                 action_emb = action_emb.unsqueeze(0) # [1, T, 3072]
-                action_emb = action_emb.unsqueeze(2).repeat(1,1,64,1).flatten(1,2)
+                action_emb = action_emb.unsqueeze(2).repeat(1,1,tokens_per_frame,1).flatten(1,2)
                 t = t + action_emb
             t_mod = dit.time_projection(t).unflatten(2, (6, dit.dim))
     else:

@@ -1,4 +1,4 @@
-import imageio, os, torch, warnings, torchvision, argparse, json
+import imageio, os, re, torch, warnings, torchvision, argparse, json
 from ..utils import ModelConfig
 from ..models.utils import load_state_dict
 from peft import LoraConfig, inject_adapter_in_model
@@ -368,13 +368,25 @@ class RLinfNpyDataset(torch.utils.data.Dataset):
         traj.npy : [T, N, 3, H, W] 或 [T, N, ...]，需保证每帧能转成图片
     """
 
-    def __init__(self, base_path='/opt/zsq/rlinf_dataset_1114_split/train_data', num_frames=9, repeat=1):
+    action_dim = 14
+    window_length = 72
+    sample_stride = 6
+    segment_pattern = re.compile(r"^(?P<episode>.+)_seg_\d+$")
+
+    def __init__(self, base_path='/opt/zsq/rlinf_dataset_1114_split/train_data', num_frames=13, repeat=1):
         self.base_path = base_path
         self.num_frames = num_frames
         self.repeat = repeat
         self.load_from_cache = False
+        sampled_frames = self.window_length // self.sample_stride
+        expected_num_frames = 1 + sampled_frames
+        if self.num_frames != expected_num_frames:
+            raise ValueError(
+                f"RLinfNpyDataset now samples first frame + {sampled_frames} frames "
+                f"from a {self.window_length}-frame window; num_frames must be {expected_num_frames}, got {self.num_frames}."
+            )
 
-        self.data_paths = []
+        episode_groups = {}
         for step_name in sorted(os.listdir(base_path)):
             # step_path = os.path.join(base_path, step_name, "video/eval")
             step_path = os.path.join(base_path, step_name)
@@ -382,70 +394,92 @@ class RLinfNpyDataset(torch.utils.data.Dataset):
                 continue
             for seed_name in sorted(os.listdir(step_path)):
                 seed_path = os.path.join(step_path, seed_name)
-                if os.path.isdir(seed_path):
-                    self.data_paths.append(seed_path)
-        if len(self.data_paths) == 0:
+                if not os.path.isdir(seed_path):
+                    continue
+                rgb_path = os.path.join(seed_path, "rgb.npy")
+                actions_path = os.path.join(seed_path, "actions.npy")
+                if not os.path.exists(rgb_path) or not os.path.exists(actions_path):
+                    continue
+
+                rgb_shape = np.load(rgb_path, mmap_mode='r').shape
+                T, N = rgb_shape[0], rgb_shape[1]
+                episode_name = self._episode_name(seed_name)
+                for env_id in range(N):
+                    episode_key = (step_name, episode_name, env_id)
+                    episode_groups.setdefault(episode_key, []).append({
+                        "path": seed_path,
+                        "T": T,
+                    })
+        if len(episode_groups) == 0:
             raise ValueError(f"No valid data paths found under {base_path}")
-        print(f'Found {len(self.data_paths)} data paths under {base_path}.')
-
-        self.T_list = []
-        self.N_list = []
-
-        for p in self.data_paths:
-            rgb_shape = np.load(os.path.join(p, "rgb.npy"), mmap_mode='r').shape
-            T, N = rgb_shape[0], rgb_shape[1]
-            self.T_list.append(T)
-            self.N_list.append(N)
-
-        self.total_env = sum(self.N_list)
-        self.length = self.total_env * repeat 
-
-        self.cum_N = np.cumsum(self.N_list)
+        self.episodes = [
+            {
+                "key": key,
+                "env_id": key[2],
+                "segments": sorted(segments, key=lambda segment: segment["path"]),
+            }
+            for key, segments in sorted(episode_groups.items())
+        ]
+        self.total_env = len(self.episodes)
+        self.length = self.total_env * repeat
+        total_segments = sum(len(episode["segments"]) for episode in self.episodes)
+        print(f'Found {self.total_env} episode/env groups from {total_segments} segments under {base_path}.')
 
 
     def __len__(self):
         return self.length
-    def _locate_env(self, global_env_id):
-        path_idx = np.searchsorted(self.cum_N, global_env_id, side='right')
-        if path_idx == 0:
-            env_id = global_env_id
-        else:
-            env_id = global_env_id - self.cum_N[path_idx - 1]
-        return path_idx, env_id
-    def __getitem__(self, idx):
-        global_env_id = idx % self.total_env
 
-        path_idx, env_id = self._locate_env(global_env_id)
-        data_path = self.data_paths[path_idx]
-        T = self.T_list[path_idx]
+    def _episode_name(self, seed_name):
+        match = self.segment_pattern.match(seed_name)
+        return match.group("episode") if match is not None else seed_name
+
+    def _num_window_starts(self, T):
+        sample_length = 256 if T > 256 else T
+        return max(0, sample_length - self.window_length + 1)
+
+    def _sample_segment(self, episode):
+        segments = episode["segments"]
+        window_counts = np.array([self._num_window_starts(segment["T"]) for segment in segments], dtype=np.float64)
+        if window_counts.sum() <= 0:
+            segment_paths = ", ".join(segment["path"] for segment in segments)
+            raise ValueError(f"No segment with at least {self.window_length} frames in episode {episode['key']}: {segment_paths}")
+        segment_idx = np.random.choice(len(segments), p=window_counts / window_counts.sum())
+        return segments[segment_idx], int(window_counts[segment_idx])
+
+    def __getitem__(self, idx):
+        episode = self.episodes[idx % self.total_env]
+        segment, num_window_starts = self._sample_segment(episode)
+        data_path = segment["path"]
+        T = segment["T"]
+        env_id = episode["env_id"]
         rgb = np.load(os.path.join(data_path, "rgb.npy"), mmap_mode='r')
         actions = np.load(os.path.join(data_path, "actions.npy"), mmap_mode='r')
 
 
-        if T > (self.num_frames-1):
-            if np.random.rand() < 0.95:
-                # 95% 随机采样
-                if T >256:
-                    start_idx = np.random.randint(0, 250)
-                else:
-                    start_idx = np.random.randint(0, T - self.num_frames + 2)
+        if T >= self.window_length:
+            start_idx = np.random.randint(0, num_window_starts)
 
-                consecutive_ids = np.arange(start_idx, start_idx + self.num_frames - 1)
-                frame_ids = np.concatenate([[0], consecutive_ids])
-            else:
-                # 5% 使用硬编码 frame_ids
-                frame_ids = np.array([0,0,0,0,0,1,2,3,4,5,6,7,8])
+            window_end_ids = np.arange(
+                start_idx + self.sample_stride - 1,
+                start_idx + self.window_length,
+                self.sample_stride,
+            )
+            frame_ids = np.concatenate([[0], window_end_ids])
         else:
-            raise ValueError(f"T={T} is too small for num_frames={self.num_frames}")
+            raise ValueError(f"T={T} is too small for window_length={self.window_length}")
         
 
         video_np = rgb[frame_ids, env_id]  # shape [num_frames, 3, H, W]
         video_list = []
         for frame in video_np:
-            if "/opt/zsq/rlinf_dataset_1114_split" in data_path:
-                img = np.transpose(frame, (1, 2, 0))  # CHW → HWC
-            else:
+            if frame.ndim == 3 and frame.shape[0] in (1, 3):
+                img = np.transpose(frame, (1, 2, 0))  # CHW -> HWC
+            elif frame.ndim == 3 and frame.shape[-1] in (1, 3):
                 img = frame
+            else:
+                raise ValueError(f"Unsupported rgb frame shape {frame.shape} from {data_path}")
+            if img.ndim == 3 and img.shape[-1] == 1:
+                img = img[..., 0]
             if img.max() <= 1.0:
                 img = (img * 255).clip(0, 255)
             video_list.append(Image.fromarray(img.astype(np.uint8)))
@@ -453,9 +487,15 @@ class RLinfNpyDataset(torch.utils.data.Dataset):
         # Action → Tensor
         action_np = actions[frame_ids, env_id]  # [num_frames, action_dim]
         action_tensor = torch.from_numpy(action_np).float()
-        action_tensor[0] = torch.tensor([0., 0., 0., 0., 0., 0., -1.],
-                                  dtype=action_tensor.dtype,
-                                  device=action_tensor.device)
+        if action_tensor.shape[-1] != self.action_dim:
+            raise ValueError(f"Expected action_dim={self.action_dim}, got {action_tensor.shape[-1]} from {data_path}")
+        first_action = torch.zeros(
+            self.action_dim,
+            dtype=action_tensor.dtype,
+            device=action_tensor.device,
+        )
+        first_action[-1] = -1
+        action_tensor[0] = first_action
         return {
             "video": video_list,
             "reference_image": [video_list[0]],

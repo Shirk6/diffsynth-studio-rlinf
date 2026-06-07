@@ -33,6 +33,9 @@ try:
 except:
     pass
 
+ACTION_DIM = 14
+ACTION_GROUP_SIZE = 4
+
 def flash_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, num_heads: int, compatibility_mode=False):
     if compatibility_mode:
         q = rearrange(q, "b s (n d) -> b n s d", n=num_heads)
@@ -403,12 +406,12 @@ class WanModel(torch.nn.Module):
         self.fuse_vae_embedding_in_latents = fuse_vae_embedding_in_latents
 
         self.action_mlp1 = nn.Sequential(
-            nn.Linear(7, dim),
+            nn.Linear(ACTION_DIM, dim),
             nn.GELU(),
             nn.Linear(dim, dim)
         )
         self.action_mlp2 = nn.Sequential(
-            nn.Linear(28, dim),
+            nn.Linear(ACTION_DIM * ACTION_GROUP_SIZE, dim),
             nn.GELU(),
             nn.Linear(dim, dim)
         )

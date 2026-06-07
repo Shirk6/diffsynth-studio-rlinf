@@ -39,6 +39,9 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import os
 
+ACTION_DIM = 14
+ACTION_GROUP_SIZE = 4
+
 
 def flash_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, num_heads: int, compatibility_mode=False):
     if compatibility_mode:
@@ -410,7 +413,7 @@ class WanModel(torch.nn.Module):
         print(f'THE MODE is one_frame_condition:{self.one_frame_condition}')
         if I2V or TI2V2 or TI2V1:
             self.action_mlp1 = nn.Sequential(
-                nn.Linear(7, dim),
+                nn.Linear(ACTION_DIM, dim),
                 nn.GELU(),
                 nn.Linear(dim, dim)
             )
@@ -418,7 +421,7 @@ class WanModel(torch.nn.Module):
 
         if TI2V2 or TI2V3:
             self.action_mlp2 = nn.Sequential(
-                nn.Linear(28, 4 * dim),
+                nn.Linear(ACTION_DIM * ACTION_GROUP_SIZE, 4 * dim),
                 nn.SiLU(),
                 nn.Linear(4 * dim, dim)
             )

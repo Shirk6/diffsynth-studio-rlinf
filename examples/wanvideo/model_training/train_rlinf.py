@@ -147,16 +147,18 @@ if __name__ == "__main__":
     parser.add_argument("--use_wow_checkpoint", action="store_true",help="Whether to load the WoW checkpoint to overwrite the base model weights.")
     parser.add_argument("--val_interval", type=int, default=5, help="Validation interval in epochs")
     parser.add_argument("--dataset",type=str,default="RLinfNpyDataset",help="Dataset type for training")
+    parser.add_argument("--train_split_dir", type=str, default="train_data", help="Training split directory under dataset_base_path")
+    parser.add_argument("--val_split_dir", type=str, default="val_data", help="Validation split directory under dataset_base_path")
     args = parser.parse_args()
 
     if args.dataset == "RLinfNpyDataset":
         dataset = RLinfNpyDataset(
-            base_path=os.path.join(args.dataset_base_path, 'train_data'),
+            base_path=os.path.join(args.dataset_base_path, args.train_split_dir),
             repeat=args.dataset_repeat,
             num_frames=args.num_frames,
         )
         val_dataset = RLinfNpyDataset(
-            base_path=os.path.join(args.dataset_base_path, 'val_data'),
+            base_path=os.path.join(args.dataset_base_path, args.val_split_dir),
             repeat=1, 
             num_frames=args.num_frames 
         )
