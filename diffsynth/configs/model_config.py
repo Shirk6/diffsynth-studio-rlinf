@@ -164,6 +164,7 @@ model_loader_configs = [
     (None, "0c81d47223c50d8d74106f79310ae207", ["wan_video_dit"], [WanModel], "civitai"), # 5B TI2V action
     (None, "3f4e37438f72ef88cd27b161fd1b193c", ["wan_video_dit"], [WanModel], "civitai"), # 5B TI2V action
     (None, "d3abb829857dff2d9129d2f396a7eace", ["wan_video_dit"], [WanModel], "civitai"), # 5B TI2V action
+    (None, "c435810b89179880969e31c28235a02d", ["wan_video_dit"], [WanModel], "civitai"), # 5B TI2V action (challenge/action_dim=14)
     (None, "bc4824aef7c3f23d3378cec6e2b1316c", ["wan_video_dit"], [WanModel], "civitai"), # 5B TI2V action
     (None, "6efc7e19e87c1755f17dec14be3d0bf1", ["wan_video_dit"], [WanModel], "civitai"), # 5B TI2V action
     #

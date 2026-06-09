@@ -115,7 +115,7 @@ def load_model_from_single_file(state_dict, model_names, model_classes, model_re
         # 如果模型有action_mlp1属性，则初始化它,这个应该仅在训练时生效
         if hasattr(model, "action_mlp1"):
             print("    Checking action_mlp1 weights for NaN/Inf...")
-            need_init1 = True
+            need_init1 = False
             for m in model.action_mlp1:
                 if isinstance(m, torch.nn.Linear):
                     if torch.isnan(m.weight).any() or torch.isinf(m.weight).any():
@@ -139,7 +139,7 @@ def load_model_from_single_file(state_dict, model_names, model_classes, model_re
         # 如果模型有action_mlp2属性，则初始化它,这个应该仅在训练时生效
         if hasattr(model, "action_mlp2"):
             print("    Checking action_mlp2 weights for NaN/Inf...")
-            need_init2 = True
+            need_init2 = False
             for m in model.action_mlp2:
                 if isinstance(m, torch.nn.Linear):
                     if torch.isnan(m.weight).any() or torch.isinf(m.weight).any():

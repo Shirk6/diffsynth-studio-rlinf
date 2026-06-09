@@ -434,8 +434,7 @@ class RLinfNpyDataset(torch.utils.data.Dataset):
         return match.group("episode") if match is not None else seed_name
 
     def _num_window_starts(self, T):
-        sample_length = 256 if T > 256 else T
-        return max(0, sample_length - self.window_length + 1)
+        return max(0, T - self.window_length + 1)
 
     def _sample_segment(self, episode):
         segments = episode["segments"]

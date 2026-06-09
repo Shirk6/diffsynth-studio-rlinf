@@ -1208,6 +1208,28 @@ class WanModelStateDictConverter:
                 "TI2V2": False,
                 "TI2V3": True,
             }
+        elif hash_state_dict_keys(state_dict) == "c435810b89179880969e31c28235a02d":
+            # Wan-AI/Wan2.2-TI2V-5B-action-challenge
+            config = {
+                "has_image_input": False,
+                "patch_size": [1, 2, 2],
+                "in_dim": 48,
+                "dim": 3072,
+                "ffn_dim": 14336,
+                "freq_dim": 256,
+                "text_dim": 4096,
+                "out_dim": 48,
+                "num_heads": 24,
+                "num_layers": 30,
+                "eps": 1e-6,
+                "seperated_timestep": True,
+                "require_clip_embedding": False,
+                "require_vae_embedding": False,
+                "fuse_vae_embedding_in_latents": True,
+                "TI2V1": False,
+                "TI2V2": True,
+                "TI2V3": False,
+            }
         elif hash_state_dict_keys(state_dict) == "5b013604280dd715f8457c6ed6d6a626":
             # Wan-AI/Wan2.2-I2V-A14B
             config = {

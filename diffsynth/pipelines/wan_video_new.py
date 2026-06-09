@@ -617,6 +617,7 @@ class WanVideoPipeline(BasePipeline):
         # Image-to-video
         input_image: Optional[Image.Image] = None,
         input_image4: Optional[list[Image.Image]] = None,
+        condition_latents: Optional[torch.Tensor] = None,
         idx: Optional[np.array] = None,
         # First-last-frame-to-video
         end_image: Optional[Image.Image] = None,
@@ -689,6 +690,7 @@ class WanVideoPipeline(BasePipeline):
         # B
         batch_size: Optional[int] = None, 
         bs_1: bool = True,
+        return_latents: bool = False,
     ):
 
 
@@ -720,7 +722,7 @@ class WanVideoPipeline(BasePipeline):
             "tea_cache_l1_thresh": tea_cache_l1_thresh, "tea_cache_model_id": tea_cache_model_id, "num_inference_steps": num_inference_steps,
         }
         inputs_shared = {
-            "input_image": input_image, "input_image4": input_image4, "batch_size": batch_size, "bs_1": bs_1,
+            "input_image": input_image, "input_image4": input_image4, "condition_latents": condition_latents, "batch_size": batch_size, "bs_1": bs_1,
             "end_image": end_image,
             "input_video": input_video, "denoising_strength": denoising_strength,
             "control_video": control_video, "reference_image": reference_image, "idx": idx, 
@@ -797,6 +799,7 @@ class WanVideoPipeline(BasePipeline):
             inputs_shared, _, _ = self.unit_runner(unit, self, inputs_shared, inputs_posi, inputs_nega)
         # Decode
         self.load_models_to_device(['vae'])
+        output_latents = inputs_shared["latents"].detach().clone() if return_latents else None
         video = self.vae.decode(inputs_shared["latents"], device=self.device, tiled=tiled, tile_size=tile_size, tile_stride=tile_stride)
         video = self.vae_output_to_video(video)
         self.load_models_to_device([])
@@ -815,6 +818,8 @@ class WanVideoPipeline(BasePipeline):
                     save_path=save_plot_path
                 )
  
+        if return_latents:
+            return video, output_latents
         return video
 
 
@@ -996,14 +1001,20 @@ class WanVideoUnit_ImageEmbedderFused(PipelineUnit):
     # 这是把第一帧放在latents的第一个位置上
     def __init__(self):
         super().__init__(
-            input_params=("input_image", "latents", "height", "width", "tiled", "tile_size", "tile_stride","input_image4"),
+            input_params=("input_image", "latents", "height", "width", "tiled", "tile_size", "tile_stride", "input_image4", "condition_latents"),
             onload_model_names=("vae",)
         )
 
-    def process(self, pipe: WanVideoPipeline, input_image, latents, height, width, tiled, tile_size, tile_stride,input_image4):
+    def process(self, pipe: WanVideoPipeline, input_image, latents, height, width, tiled, tile_size, tile_stride, input_image4, condition_latents):
         if input_image is None or not pipe.dit.fuse_vae_embedding_in_latents:
             # print(f'===== WanVideoUnit_ImageEmbedderFused: input_image is None or not fuse_vae_embedding_in_latents =====')
             return {}
+        if condition_latents is not None:
+            z = condition_latents.to(dtype=pipe.torch_dtype, device=pipe.device)
+            if z.dim() == 4:
+                z = z.unsqueeze(0)
+            latents[:, :, :z.shape[2]] = z
+            return {"latents": latents, "fuse_vae_embedding_in_latents": True, "first_frame_latents": z}
         pipe.load_models_to_device(self.onload_model_names)
         if input_image4 is None:
             image = pipe.preprocess_image(input_image.resize((width, height))).transpose(0, 1)
