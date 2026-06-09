@@ -158,24 +158,22 @@ def main():
     condition_frames = 5
     predict_frames = 8
     window = condition_frames + predict_frames
-    num_iters = max(1, (total_frames - 1 + predict_frames - 1) // predict_frames)
+    num_iters = max(0, (total_frames - condition_frames + predict_frames - 1) // predict_frames)
     print(f"Autoregressive chunks: {num_iters}, window={window}, condition={condition_frames}, predict={predict_frames}")
 
-    generated = [gt_frames[0]]
+    generated = gt_frames[:condition_frames]
     input_image = gt_frames[0]
-    input_image4 = [gt_frames[0]] * 4
+    input_image4 = gt_frames[1:condition_frames]
     condition_latents = None
     if not args.no_latent_condition_cache:
         condition_latents = encode_condition_latents(pipe, [input_image] + input_image4, args.height, args.width)
 
     last_latents = None
     for chunk_id in range(num_iters):
-        start = chunk_id * predict_frames
-        end = start + predict_frames
-        if start == 0:
-            idx = [0] * condition_frames + list(range(1, predict_frames + 1))
-        else:
-            idx = [0] + list(range(start - 3, end + 1))
+        predict_start = condition_frames + chunk_id * predict_frames
+        predict_end = predict_start + predict_frames
+        context_start = predict_start - (condition_frames - 1)
+        idx = [0] + list(range(context_start, predict_end))
         print(f"Chunk {chunk_id + 1}/{num_iters}: context_idx={idx[:condition_frames]}, predict_idx={idx[condition_frames:]}")
 
         out_video, last_latents = pipe(
