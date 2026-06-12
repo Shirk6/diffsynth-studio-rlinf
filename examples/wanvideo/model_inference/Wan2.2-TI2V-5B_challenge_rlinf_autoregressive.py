@@ -16,10 +16,10 @@ from diffsynth import save_video
 from diffsynth.pipelines.wan_video_new import ModelConfig, WanVideoPipeline
 
 
-DEFAULT_DATA_ROOT = "/project/peilab/srk/rss_2026_ws/Challenge-phase1-dataset-rlinf/tower-of-hanoi-game/val-data"
+DEFAULT_DATA_ROOT = "/project/peilab/srk/rss_2026_ws/Challenge-phase1-dataset-rlinf/insert-mouse-battery/train-data"
 DEFAULT_MODEL_ROOT = "/project/peilab/srk/rss_2026_ws/models/Wan-AI/Wan2.2-TI2V-5B"
-DEFAULT_CKPT = "/project/peilab/srk/rss_2026_ws/diffsynth-studio/outputs/Wan2.2-TI2V-5B_challenge_rlinf/epoch-3599.safetensors"
-DEFAULT_OUTPUT = "/project/peilab/srk/rss_2026_ws/diffsynth-studio/outputs/challenge_rlinf_autoregressive"
+DEFAULT_CKPT = "/project/peilab/srk/rss_2026_ws/diffsynth-studio/outputs/insert-mouse-battery/epoch-7199.safetensors"
+DEFAULT_OUTPUT = "/project/peilab/srk/rss_2026_ws/diffsynth-studio/outputs/challenge_rlinf_autoregressive_battery"
 
 
 def parse_args():

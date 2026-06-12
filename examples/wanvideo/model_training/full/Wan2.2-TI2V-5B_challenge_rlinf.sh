@@ -1,15 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd /project/peilab/srk/rss_2026_ws/diffsynth-studio
 
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
 
-MODEL_DIR="/project/peilab/srk/rss_2026_ws/models/Wan-AI/Wan2.2-TI2V-5B"
-DATASET_BASE="/project/peilab/srk/rss_2026_ws/Challenge-phase1-dataset-rlinf/tower-of-hanoi-game"
-OUTPUT_PATH="${OUTPUT_PATH:-outputs/Wan2.2-TI2V-5B_challenge_rlinf}"
+MODEL_DIR="${MODEL_DIR:-models/Wan-AI/Wan2.2-TI2V-5B}"
+DATASET_BASE="${DATASET_BASE:-mnt/amlfs-01/home/fangqiz/Challenge-phase1-dataset-rlinf)"
+OUTPUT_PATH="${OUTPUT_PATH:-outputs/seal-water-bottle-cap}"
+NUM_MACHINES="${NUM_MACHINES:-8}"
+NUM_PROCESSES="${NUM_PROCESSES:-64}"
+MACHINE_RANK="${MACHINE_RANK:-0}"
+MAIN_PROCESS_IP="${MAIN_PROCESS_IP:-127.0.0.1}"
+MAIN_PROCESS_PORT="${MAIN_PROCESS_PORT:-29500}"
 
 accelerate launch \
+  --num_machines "${NUM_MACHINES}" \
+  --num_processes "${NUM_PROCESSES}" \
+  --machine_rank "${MACHINE_RANK}" \
+  --main_process_ip "${MAIN_PROCESS_IP}" \
+  --main_process_port "${MAIN_PROCESS_PORT}" \
   --config_file examples/wanvideo/model_training/full/accelerate_config_14B.yaml \
   examples/wanvideo/model_training/train_rlinf.py \
   --height 544 \
@@ -33,9 +42,12 @@ accelerate launch \
   --context_noise_sigma 0.0 \
   --static_video_prob 0.05 \
   --extra_inputs "input_image,action" \
-  --val_interval 10 \
+  --val_interval 100 \
   --save_epochs 200 \
   --dataset RLinfNpyDataset \
   --dataset_base_path "${DATASET_BASE}" \
   --train_split_dir "train-data" \
-  --val_split_dir "val-data"
+  --val_split_dir "val-data" \
+  --log_backend wandb \
+  --wandb_project wan-world-model \
+  --wandb_run_name seal-water-bottle-cap

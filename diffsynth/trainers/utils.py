@@ -10,6 +10,82 @@ from accelerate.utils import DistributedDataParallelKwargs
 from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 
+class TrainingLogger:
+    def __init__(self, args=None, accelerator=None):
+        self.writer = None
+        self.wandb = None
+        self.wandb_run = None
+        self.is_main_process = accelerator is None or accelerator.is_main_process
+        if not self.is_main_process:
+            return
+
+        log_backend = getattr(args, "log_backend", "tensorboard") if args is not None else "tensorboard"
+        log_backend = (log_backend or "none").lower()
+        output_path = getattr(args, "output_path", "./") if args is not None else "./"
+
+        if log_backend in ("tensorboard", "all"):
+            self.writer = SummaryWriter(log_dir=os.path.join(output_path, "tensorboard"))
+
+        if log_backend in ("wandb", "all"):
+            try:
+                import wandb
+            except ImportError as exc:
+                raise ImportError(
+                    "wandb logging was requested, but wandb is not installed. "
+                    "Install it with `pip install wandb` or use `--log_backend tensorboard`."
+                ) from exc
+
+            wandb_dir = getattr(args, "wandb_dir", None) if args is not None else None
+            if wandb_dir is None:
+                wandb_dir = os.path.join(output_path, "wandb")
+            os.makedirs(wandb_dir, exist_ok=True)
+
+            wandb_kwargs = {
+                "project": getattr(args, "wandb_project", "diffsynth-studio") if args is not None else "diffsynth-studio",
+                "name": getattr(args, "wandb_run_name", None) if args is not None else None,
+                "entity": getattr(args, "wandb_entity", None) if args is not None else None,
+                "group": getattr(args, "wandb_group", None) if args is not None else None,
+                "mode": getattr(args, "wandb_mode", None) if args is not None else None,
+                "dir": wandb_dir,
+                "config": vars(args) if args is not None else None,
+            }
+            wandb_kwargs = {key: value for key, value in wandb_kwargs.items() if value is not None}
+            self.wandb = wandb
+            self.wandb_run = wandb.init(**wandb_kwargs)
+
+    def add_scalar(self, tag, scalar_value, step, wandb_step=None, extra_logs=None):
+        if self.writer is not None:
+            self.writer.add_scalar(tag, scalar_value, step)
+        if self.wandb_run is not None:
+            logs = {tag: scalar_value}
+            if extra_logs is not None:
+                logs.update(extra_logs)
+            self.wandb.log(logs, step=step if wandb_step is None else wandb_step)
+
+    def close(self):
+        if self.writer is not None:
+            self.writer.close()
+        if self.wandb_run is not None:
+            self.wandb.finish()
+
+
+def add_training_logger_arguments(parser):
+    parser.add_argument(
+        "--log_backend",
+        type=str,
+        default="tensorboard",
+        choices=["none", "tensorboard", "wandb", "all"],
+        help="Metric logging backend.",
+    )
+    parser.add_argument("--wandb_project", type=str, default="diffsynth-studio", help="Weights & Biases project name.")
+    parser.add_argument("--wandb_run_name", type=str, default=None, help="Weights & Biases run name.")
+    parser.add_argument("--wandb_entity", type=str, default=None, help="Weights & Biases entity name.")
+    parser.add_argument("--wandb_group", type=str, default=None, help="Weights & Biases run group.")
+    parser.add_argument("--wandb_mode", type=str, default=None, choices=["online", "offline", "disabled"], help="Weights & Biases mode.")
+    parser.add_argument("--wandb_dir", type=str, default=None, help="Weights & Biases local log directory.")
+    return parser
+
+
 class ImageDataset(torch.utils.data.Dataset):
     def __init__(
         self,
@@ -661,9 +737,9 @@ class ModelLogger:
 
 def launch_training_task(
     dataset: torch.utils.data.Dataset,
-    val_dataset: torch.utils.data.Dataset,
-    model: DiffusionTrainingModule,
-    model_logger: ModelLogger,
+    val_dataset: torch.utils.data.Dataset = None,
+    model: DiffusionTrainingModule = None,
+    model_logger: ModelLogger = None,
     learning_rate: float = 1e-5,
     weight_decay: float = 1e-2,
     num_workers: int = 8,
@@ -674,28 +750,35 @@ def launch_training_task(
     find_unused_parameters: bool = False,
     args = None,
 ):
+    if model_logger is None:
+        model_logger = model
+        model = val_dataset
+        val_dataset = None
+
+    val_interval = 1
     if args is not None:
         learning_rate = args.learning_rate
         weight_decay = args.weight_decay
         num_workers = args.dataset_num_workers
         save_steps = args.save_steps
-        save_epochs = args.save_epochs
+        save_epochs = getattr(args, "save_epochs", save_epochs)
         num_epochs = args.num_epochs
         gradient_accumulation_steps = args.gradient_accumulation_steps
         find_unused_parameters = args.find_unused_parameters
-        ###验证集
-        val_interval = args.val_interval # 5
-    writer = SummaryWriter(log_dir=os.path.join(args.output_path, "tensorboard") if args is not None else "./tensorboard")
-
+        val_interval = getattr(args, "val_interval", val_interval)
     optimizer = torch.optim.AdamW(model.trainable_modules(), lr=learning_rate, weight_decay=weight_decay)
     scheduler = torch.optim.lr_scheduler.ConstantLR(optimizer)
     dataloader = torch.utils.data.DataLoader(dataset, shuffle=True, collate_fn=lambda x: x[0], num_workers=num_workers)
-    val_dataloader = torch.utils.data.DataLoader(val_dataset, shuffle=False, collate_fn=lambda x: x[0], num_workers=num_workers)
+    val_dataloader = torch.utils.data.DataLoader(val_dataset, shuffle=False, collate_fn=lambda x: x[0], num_workers=num_workers) if val_dataset is not None else None
     accelerator = Accelerator(
         gradient_accumulation_steps=gradient_accumulation_steps,
         kwargs_handlers=[DistributedDataParallelKwargs(find_unused_parameters=find_unused_parameters)],
     )
-    model, optimizer, dataloader, val_dataloader, scheduler = accelerator.prepare(model, optimizer, dataloader, val_dataloader, scheduler)
+    if val_dataloader is not None:
+        model, optimizer, dataloader, val_dataloader, scheduler = accelerator.prepare(model, optimizer, dataloader, val_dataloader, scheduler)
+    else:
+        model, optimizer, dataloader, scheduler = accelerator.prepare(model, optimizer, dataloader, scheduler)
+    training_logger = TrainingLogger(args=args, accelerator=accelerator)
 
     global_step = 0
     epoch_loss = 0.0
@@ -721,7 +804,7 @@ def launch_training_task(
                 scheduler.step()
 
                 if accelerator.is_main_process:
-                    writer.add_scalar("Loss/step", loss.item(), global_step)
+                    training_logger.add_scalar("Loss/step", loss.item(), global_step)
                 epoch_loss += loss.item()
                 epoch_steps += 1
                 global_step += 1
@@ -730,7 +813,7 @@ def launch_training_task(
                 if epoch_steps > 500:
                     break
         if accelerator.is_main_process and epoch_steps > 0:
-            writer.add_scalar("Loss/epoch", epoch_loss / epoch_steps, epoch_id)
+            training_logger.add_scalar("Loss/epoch", epoch_loss / epoch_steps, epoch_id, wandb_step=global_step, extra_logs={"epoch": epoch_id})
 
         if val_dataloader is not None and (epoch_id + 1) % val_interval == 0:
             model.eval()
@@ -757,7 +840,7 @@ def launch_training_task(
             if val_steps > 0:
                 avg_val_loss = val_loss / val_steps
                 if accelerator.is_main_process:
-                    writer.add_scalar("Loss/val_epoch", avg_val_loss, epoch_id)
+                    training_logger.add_scalar("Loss/val_epoch", avg_val_loss, epoch_id, wandb_step=global_step, extra_logs={"epoch": epoch_id})
                     print(f"Epoch {epoch_id} Validation Loss: {avg_val_loss}")
             
             model.train() 
@@ -765,7 +848,7 @@ def launch_training_task(
         if save_steps is None and (epoch_id + 1) % save_epochs == 0:
             model_logger.on_epoch_end(accelerator, model, epoch_id)
     model_logger.on_training_end(accelerator, model, save_steps)
-    writer.close()
+    training_logger.close()
 
 
 def launch_data_process_task(
@@ -826,6 +909,7 @@ def wan_parser():
     parser.add_argument("--dataset_num_workers", type=int, default=0, help="Number of workers for data loading.")
     parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay.")
     
+    add_training_logger_arguments(parser)
     return parser
 
 
@@ -859,6 +943,7 @@ def flux_parser():
     parser.add_argument("--save_steps", type=int, default=None, help="Number of checkpoint saving invervals. If None, checkpoints will be saved every epoch.")
     parser.add_argument("--dataset_num_workers", type=int, default=0, help="Number of workers for data loading.")
     parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay.")
+    add_training_logger_arguments(parser)
     return parser
 
 
@@ -895,4 +980,5 @@ def qwen_image_parser():
     parser.add_argument("--processor_path", type=str, default=None, help="Path to the processor. If provided, the processor will be used for image editing.")
     parser.add_argument("--enable_fp8_training", default=False, action="store_true", help="Whether to enable FP8 training. Only available for LoRA training on a single GPU.")
     parser.add_argument("--task", type=str, default="sft", required=False, help="Task type.")
+    add_training_logger_arguments(parser)
     return parser
